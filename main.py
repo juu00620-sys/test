@@ -560,18 +560,11 @@ async def main():
     pygame.display.set_caption("2.5D 積木人大戰殭屍")
     clock = pygame.time.Clock()
 
-    FONT_NAME = "microsoftjhenghei"
-    font_path = pygame.font.match_font(FONT_NAME)
-    if font_path:
-        font_sm = pygame.font.Font(font_path, 13)
-        font_md = pygame.font.Font(font_path, 18)
-        font_lg = pygame.font.Font(font_path, 26)
-        font_xl = pygame.font.Font(font_path, 40)
-    else:
-        font_sm = pygame.font.SysFont(FONT_NAME, 13, bold=True)
-        font_md = pygame.font.SysFont(FONT_NAME, 18, bold=True)
-        font_lg = pygame.font.SysFont(FONT_NAME, 26, bold=True)
-        font_xl = pygame.font.SysFont(FONT_NAME, 40, bold=True)
+    FONT_PATH = "font.ttf"
+    font_sm = pygame.font.Font(FONT_PATH, 13)
+    font_md = pygame.font.Font(FONT_PATH, 18)
+    font_lg = pygame.font.Font(FONT_PATH, 26)
+    font_xl = pygame.font.Font(FONT_PATH, 40)
 
     hud = GameHUD(SCREEN_WIDTH, SCREEN_HEIGHT)
 
