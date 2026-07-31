@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import pygame
+import asyncio
 import random
 import math
 import sys
@@ -553,7 +554,7 @@ def draw_floating_bar(screen, cx, cy_top, width, height, ratio, fg_color, bg_col
     if fill_w > 0:
         pygame.draw.rect(screen, fg_color, (x + 1, cy_top + 1, fill_w, height - 2), border_radius=2)
 
-def main():
+async def main():
     pygame.init()
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
     pygame.display.set_caption("2.5D 積木人大戰殭屍")
@@ -1008,9 +1009,10 @@ def main():
             screen.blit(start_txt, ((SCREEN_WIDTH - start_txt.get_width()) // 2, 520))
 
         pygame.display.flip()
+        await asyncio.sleep(0)
 
     pygame.quit()
     sys.exit()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
