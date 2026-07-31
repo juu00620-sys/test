@@ -1,0 +1,7 @@
+*.wasm binary
+*.data binary
+*.whl binary
+*.ttf binary
+*.tar.gz binary
+*.png binary
+*.jpg binary
