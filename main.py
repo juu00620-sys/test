@@ -1,504 +1,41 @@
 # -*- coding: utf-8 -*-
-import pygame
-import asyncio
-import random
-import math
+import os
 import sys
+import math
+import random
+import asyncio
+import pygame
+
+from map import (
+    SCREEN_WIDTH, SCREEN_HEIGHT, MAP_WIDTH, MAP_HEIGHT,
+    THEME_WAVES, MAP_THEMES,
+    build_obstacles, move_with_collision,
+    draw_scrolling_grid, draw_obstacle,
+)
+from weapon import Weapon
+from player import (
+    PlayerStats, ARMOR_TIERS,
+    joystick_handle_down, joystick_handle_move, joystick_handle_up, joystick_vector,
+)
+from zombie import (
+    Zombie, Boss,
+    BOSS_WARNING_DURATION, BOSS_HP_MULTIPLIER, BOSS_ATTACK_MULTIPLIER,
+)
+from bullet import Bullet
+from effects import (
+    EFFECT_FLASH_DURATION,
+    spawn_boss_kill_particles, update_particles, draw_particles, draw_effect_flash,
+)
+from ui import (
+    GameHUD, draw_joystick, draw_floating_bar,
+    draw_pause_button, draw_pause_menu,
+    TALENT_POOL, TALENT_WEIGHTS, weighted_sample_without_replacement,
+)
 
-SCREEN_WIDTH = 1024
-SCREEN_HEIGHT = 768
-MAP_WIDTH = 2400
-MAP_HEIGHT = 1800
-
-GRID_SIZE = 80
-
-OBSTACLE_MARGIN = 150
-PLAYER_SPAWN_CLEAR_RADIUS = 260
-
-THEME_WAVES = 5
-MAP_THEMES = [
-    {"name": "Grassy Plains", "floor": (45, 60, 40),  "grid": (55, 72, 50),   "obstacle": (150, 110, 70),  "obstacle_dark": (100, 70, 40),  "ob_size": 90, "ob_count": 18},
-    {"name": "Abandoned Warehouse", "floor": (52, 52, 58),  "grid": (66, 66, 74),   "obstacle": (120, 120, 130), "obstacle_dark": (80, 80, 92),   "ob_size": 110, "ob_count": 14},
-    {"name": "Desert Ruins", "floor": (92, 76, 50),  "grid": (108, 90, 60),  "obstacle": (185, 150, 100), "obstacle_dark": (135, 105, 68), "ob_size": 70, "ob_count": 24},
-    {"name": "Frozen Tundra", "floor": (58, 68, 84),  "grid": (74, 84, 100),  "obstacle": (205, 222, 235), "obstacle_dark": (150, 172, 190),"ob_size": 100, "ob_count": 16},
-]
-
-BOSS_WARNING_DURATION = 3.0
-BOSS_SIZE = 64
-EFFECT_FLASH_DURATION = 0.35
-BOSS_HP_MULTIPLIER = 2.0
-BOSS_ATTACK_MULTIPLIER = 2.0
-
-ZOMBIE_BASE_ATTACK = 0.3
-ZOMBIE_ATTACK_GROWTH_PER_WAVE = 0.02
-
-JOY_BASE_POS = (120, SCREEN_HEIGHT - 140)
-JOY_BASE_RADIUS = 70
-JOY_KNOB_RADIUS = 32
-JOY_DEADZONE = 0.15
-
-WEAPON_TYPES = {
-    "rifle": {
-        "name": "Assault Rifle",
-        "base_damage": 7.5,
-        "base_fire_rate": 0.2,
-        "base_shots": 1,
-        "base_pierce": 1,
-        "spread_angle": 5,
-        "bullet_speed": 12,
-        "max_range": 450,
-    },
-    "shotgun": {
-        "name": "Shotgun",
-        "base_damage": 5,
-        "base_fire_rate": 0.6,
-        "base_shots": 5,
-        "base_pierce": 1,
-        "spread_angle": 25,
-        "bullet_speed": 10,
-        "max_range": 250,
-    },
-    "sniper": {
-        "name": "Heavy Sniper",
-        "base_damage": 27.5,
-        "base_fire_rate": 1.0,
-        "base_shots": 1,
-        "base_pierce": 4,
-        "spread_angle": 0,
-        "bullet_speed": 18,
-        "max_range": 700,
-    },
-    "grenade": {
-        "name": "Grenade Launcher",
-        "base_damage": 20,
-        "base_fire_rate": 1.2,
-        "base_shots": 1,
-        "base_pierce": 1,
-        "spread_angle": 0,
-        "bullet_speed": 8,
-        "max_range": 350,
-    }
-}
-
-WEAPON_TIERS = {
-    "Fine": {"lvl": 1, "color": (50, 205, 50),   "dmg_m": 1.2, "fr_m": 0.9, "add_p": 0, "add_s": 0},
-    "Epic": {"lvl": 2, "color": (147, 112, 219), "dmg_m": 1.5, "fr_m": 0.8, "add_p": 1, "add_s": 0},
-    "Sacred": {"lvl": 3, "color": (255, 215, 0),   "dmg_m": 2.0, "fr_m": 0.7, "add_p": 1, "add_s": 1},
-    "Royal": {"lvl": 4, "color": (255, 140, 0),   "dmg_m": 2.8, "fr_m": 0.6, "add_p": 2, "add_s": 2},
-    "Imperial": {"lvl": 5, "color": (220, 20, 60),   "dmg_m": 4.0, "fr_m": 0.5, "add_p": 3, "add_s": 3},
-    "Divine": {"lvl": 6, "color": (0, 255, 255),   "dmg_m": 6.5, "fr_m": 0.35, "add_p": 99, "add_s": 4}
-}
-
-ARMOR_TIERS = {
-    1: {"name": "Wooden Block Armor", "color": (220, 220, 220), "value": 30, "reduction": 0.10},
-    2: {"name": "Iron Alloy Block Armor", "color": (180, 220, 255), "value": 60, "reduction": 0.20},
-    3: {"name": "Gold Alloy Block Armor", "color": (255, 235, 150), "value": 100, "reduction": 0.35},
-    4: {"name": "Vibranium Diamond Block Armor", "color": (230, 180, 255), "value": 150, "reduction": 0.50},
-}
-
-TALENT_POOL = [
-    {"id": "add_armor", "name": "Armor Airdrop", "desc": "Randomly gain a high-tier armor set", "max_rank": 5},
-    {"id": "hp_up", "name": "Vitality Boost", "desc": "Max HP +25, and restore 25 HP", "max_rank": 3},
-    {"id": "speed_up", "name": "Light Footwork", "desc": "Move speed +12%", "max_rank": 3},
-    {"id": "weapon_tier_up", "name": "Weapon Breakthrough", "desc": "Upgrade current weapon by one tier!", "max_rank": 5},
-    {"id": "switch_weapon", "name": "Switch Weapon", "desc": "Randomly switch to another weapon type", "max_rank": 5},
-]
-
-TALENT_WEIGHTS = {
-    "add_armor": 1.0,
-    "hp_up": 1.0,
-    "speed_up": 1.0,
-    "weapon_tier_up": 0.35,
-    "switch_weapon": 1.0,
-}
-
-def weighted_sample_without_replacement(population, weights, k):
-    pool = list(population)
-    w = list(weights)
-    result = []
-    for _ in range(min(k, len(pool))):
-        total = sum(w)
-        r = random.uniform(0, total)
-        upto = 0.0
-        for i, wt in enumerate(w):
-            upto += wt
-            if upto >= r:
-                result.append(pool.pop(i))
-                w.pop(i)
-                break
-        else:
-            result.append(pool.pop())
-            w.pop()
-    return result
-
-def build_obstacles(theme_index):
-    theme = MAP_THEMES[theme_index]
-    ob_size = theme["ob_size"]
-    ob_count = theme["ob_count"]
-
-    rng = random.Random(20260730 + theme_index * 97)
-    obstacles = []
-    spawn_x, spawn_y = MAP_WIDTH // 2, MAP_HEIGHT // 2
-    attempts = 0
-    while len(obstacles) < ob_count and attempts < 1500:
-        attempts += 1
-        x = rng.randint(OBSTACLE_MARGIN, MAP_WIDTH - OBSTACLE_MARGIN - ob_size)
-        y = rng.randint(OBSTACLE_MARGIN, MAP_HEIGHT - OBSTACLE_MARGIN - ob_size)
-        rect = pygame.Rect(x, y, ob_size, ob_size)
-        cx, cy = rect.center
-        if math.hypot(cx - spawn_x, cy - spawn_y) < PLAYER_SPAWN_CLEAR_RADIUS:
-            continue
-        if any(rect.colliderect(o.inflate(40, 40)) for o in obstacles):
-            continue
-        obstacles.append(rect)
-    return obstacles
-
-def move_with_collision(rect, dx, dy, obstacles):
-    rect.x += dx
-    for ob in obstacles:
-        if rect.colliderect(ob):
-            if dx > 0:
-                rect.right = ob.left
-            elif dx < 0:
-                rect.left = ob.right
-
-    rect.y += dy
-    for ob in obstacles:
-        if rect.colliderect(ob):
-            if dy > 0:
-                rect.bottom = ob.top
-            elif dy < 0:
-                rect.top = ob.bottom
-
-    return rect
-
-def joystick_handle_down(pos, joy_state):
-    cx, cy = JOY_BASE_POS
-    dist = math.hypot(pos[0] - cx, pos[1] - cy)
-    if dist <= JOY_BASE_RADIUS * 1.6:
-        joy_state["active"] = True
-        joy_state["offset"] = [0.0, 0.0]
-
-def joystick_handle_move(pos, joy_state):
-    if not joy_state["active"]:
-        return
-    cx, cy = JOY_BASE_POS
-    ox, oy = pos[0] - cx, pos[1] - cy
-    dist = math.hypot(ox, oy)
-    if dist > JOY_BASE_RADIUS:
-        ox = ox / dist * JOY_BASE_RADIUS
-        oy = oy / dist * JOY_BASE_RADIUS
-    joy_state["offset"] = [ox, oy]
-
-def joystick_handle_up(joy_state):
-    joy_state["active"] = False
-    joy_state["offset"] = [0.0, 0.0]
-
-def joystick_vector(joy_state):
-    if not joy_state["active"]:
-        return 0.0, 0.0, 0.0
-    ox, oy = joy_state["offset"]
-    dist = math.hypot(ox, oy)
-    if dist < 1e-6:
-        return 0.0, 0.0, 0.0
-    return ox / dist, oy / dist, min(1.0, dist / JOY_BASE_RADIUS)
-
-def draw_joystick(screen, joy_state):
-    base_surf = pygame.Surface((JOY_BASE_RADIUS * 2, JOY_BASE_RADIUS * 2), pygame.SRCALPHA)
-    pygame.draw.circle(base_surf, (255, 255, 255, 60), (JOY_BASE_RADIUS, JOY_BASE_RADIUS), JOY_BASE_RADIUS)
-    pygame.draw.circle(base_surf, (255, 255, 255, 120), (JOY_BASE_RADIUS, JOY_BASE_RADIUS), JOY_BASE_RADIUS, width=3)
-    screen.blit(base_surf, (JOY_BASE_POS[0] - JOY_BASE_RADIUS, JOY_BASE_POS[1] - JOY_BASE_RADIUS))
-
-    ox, oy = joy_state["offset"] if joy_state["active"] else (0.0, 0.0)
-    knob_surf = pygame.Surface((JOY_KNOB_RADIUS * 2, JOY_KNOB_RADIUS * 2), pygame.SRCALPHA)
-    pygame.draw.circle(knob_surf, (255, 255, 255, 170), (JOY_KNOB_RADIUS, JOY_KNOB_RADIUS), JOY_KNOB_RADIUS)
-    knob_x = JOY_BASE_POS[0] + ox - JOY_KNOB_RADIUS
-    knob_y = JOY_BASE_POS[1] + oy - JOY_KNOB_RADIUS
-    screen.blit(knob_surf, (knob_x, knob_y))
-
-class Weapon:
-    def __init__(self, type_id="rifle", tier_name="Fine"):
-        self.type_id = type_id
-        self.type_data = WEAPON_TYPES[type_id]
-        self.tier_name = tier_name
-        self.tier_data = WEAPON_TIERS[tier_name]
-
-    @property
-    def display_name(self):
-        return f"【{self.tier_name}】{self.type_data['name']}"
-
-    @property
-    def damage(self):
-        return self.type_data["base_damage"] * self.tier_data["dmg_m"]
-
-    @property
-    def fire_rate(self):
-        return self.type_data["base_fire_rate"] * self.tier_data["fr_m"]
-
-    @property
-    def shot_count(self):
-        return self.type_data["base_shots"] + self.tier_data["add_s"]
-
-    @property
-    def pierce(self):
-        return self.type_data["base_pierce"] + self.tier_data["add_p"]
-
-    @property
-    def max_range(self):
-        return self.type_data["max_range"]
-
-    @property
-    def color(self):
-        return self.tier_data["color"]
-
-    def upgrade_tier(self):
-        tiers = list(WEAPON_TIERS.keys())
-        idx = tiers.index(self.tier_name)
-        if idx < len(tiers) - 1:
-            self.tier_name = tiers[idx + 1]
-            self.tier_data = WEAPON_TIERS[self.tier_name]
-
-    def change_type_randomly(self):
-        other_types = [t for t in WEAPON_TYPES.keys() if t != self.type_id]
-        self.type_id = random.choice(other_types)
-        self.type_data = WEAPON_TYPES[self.type_id]
-
-class PlayerStats:
-    def __init__(self):
-        self.level = 1
-        self.exp = 0
-        self.exp_to_next_level = 100
-
-        self.max_hp = 100
-        self.hp = 100
-        self.move_speed = 5.0
-
-        self.armor_tier = 0
-        self.armor_hp = 0
-        self.max_armor_hp = 0
-        self.damage_reduction = 0.0
-
-        self.weapon = Weapon("rifle", "Fine")
-
-    def equip_armor(self, tier):
-        tier_info = ARMOR_TIERS[tier]
-        self.armor_tier = tier
-        self.max_armor_hp = tier_info["value"]
-        self.armor_hp = self.max_armor_hp
-        self.damage_reduction = tier_info["reduction"]
-
-    def take_damage(self, raw_damage):
-        damage = raw_damage * (1.0 - self.damage_reduction)
-        if self.armor_hp > 0:
-            if self.armor_hp >= damage:
-                self.armor_hp -= damage
-                damage = 0
-            else:
-                damage -= self.armor_hp
-                self.armor_hp = 0
-                self.armor_tier = 0
-                self.damage_reduction = 0.0
-
-        if damage > 0:
-            self.hp -= damage
-            if self.hp < 0:
-                self.hp = 0
-
-class Bullet(pygame.sprite.Sprite):
-    def __init__(self, x, y, angle_deg, damage, speed, pierce, color, tier_lvl, max_range):
-        super().__init__()
-        radius = 4 + tier_lvl
-        self.image = pygame.Surface((radius * 2, radius * 2), pygame.SRCALPHA)
-        pygame.draw.circle(self.image, color, (radius, radius), radius)
-        pygame.draw.circle(self.image, (255, 255, 255), (radius, radius), max(2, radius - 3))
-        self.rect = self.image.get_rect(center=(x, y))
-
-        rad = math.radians(angle_deg)
-        self.vx = math.cos(rad) * speed
-        self.vy = math.sin(rad) * speed
-        self.damage = damage
-        self.pierce = pierce
-        self.hit_enemies = set()
-        self.pos_x, self.pos_y = float(x), float(y)
-
-        self.start_x, self.start_y = float(x), float(y)
-        self.max_range = max_range
-
-    def update(self, dt):
-        self.pos_x += self.vx
-        self.pos_y += self.vy
-        self.rect.x, self.rect.y = int(self.pos_x), int(self.pos_y)
-
-        traveled = math.hypot(self.pos_x - self.start_x, self.pos_y - self.start_y)
-        if traveled >= self.max_range:
-            self.kill()
-            return
-
-        if not (0 <= self.pos_x <= MAP_WIDTH and 0 <= self.pos_y <= MAP_HEIGHT):
-            self.kill()
-
-class Zombie(pygame.sprite.Sprite):
-    is_boss = False
-
-    def __init__(self, x, y, hp=30, wave=1):
-        super().__init__()
-        self.image = pygame.Surface((32, 32), pygame.SRCALPHA)
-        pygame.draw.rect(self.image, (40, 160, 60), (0, 0, 32, 32), border_radius=4)
-        pygame.draw.rect(self.image, (20, 20, 20), (6, 6, 6, 6))
-        pygame.draw.rect(self.image, (20, 20, 20), (20, 6, 6, 6))
-        self.rect = self.image.get_rect(center=(x, y))
-
-        self.pos_x, self.pos_y = float(x), float(y)
-        self.hp = hp
-        self.max_hp = hp
-        self.speed = 1.3
-        self.attack = ZOMBIE_BASE_ATTACK + (wave - 1) * ZOMBIE_ATTACK_GROWTH_PER_WAVE
-
-    def update(self, player_pos, obstacles, neighbors):
-        dx = player_pos[0] - self.pos_x
-        dy = player_pos[1] - self.pos_y
-        dist = math.hypot(dx, dy)
-        dir_x, dir_y = (dx / dist, dy / dist) if dist > 0 else (0.0, 0.0)
-
-        sep_x, sep_y = 0.0, 0.0
-        for other in neighbors:
-            if other is self:
-                continue
-            ox = self.pos_x - other.pos_x
-            oy = self.pos_y - other.pos_y
-            d = math.hypot(ox, oy)
-            if 0 < d < 34:
-                sep_x += ox / d
-                sep_y += oy / d
-
-        move_x = dir_x + sep_x * 0.8
-        move_y = dir_y + sep_y * 0.8
-        m = math.hypot(move_x, move_y)
-        if m > 0:
-            move_x = move_x / m * self.speed
-            move_y = move_y / m * self.speed
-
-        move_rect = pygame.Rect(0, 0, 32, 32)
-        move_rect.center = (self.pos_x, self.pos_y)
-        move_rect = move_with_collision(move_rect, move_x, move_y, obstacles)
-
-        self.pos_x, self.pos_y = float(move_rect.centerx), float(move_rect.centery)
-        self.rect.center = (int(self.pos_x), int(self.pos_y))
-
-class Boss(Zombie):
-    is_boss = True
-
-    def __init__(self, x, y, hp, wave=1):
-        pygame.sprite.Sprite.__init__(self)
-        self.image = pygame.Surface((BOSS_SIZE, BOSS_SIZE), pygame.SRCALPHA)
-        pygame.draw.rect(self.image, (120, 20, 25), (0, 0, BOSS_SIZE, BOSS_SIZE), border_radius=10)
-        pygame.draw.rect(self.image, (255, 215, 0), (0, 0, BOSS_SIZE, BOSS_SIZE), width=4, border_radius=10)
-        pygame.draw.rect(self.image, (20, 20, 20), (16, 16, 12, 12))
-        pygame.draw.rect(self.image, (20, 20, 20), (36, 16, 12, 12))
-        self.rect = self.image.get_rect(center=(x, y))
-
-        self.pos_x, self.pos_y = float(x), float(y)
-        self.hp = hp
-        self.max_hp = hp
-        self.speed = 0.9
-        self.attack = (ZOMBIE_BASE_ATTACK + (wave - 1) * ZOMBIE_ATTACK_GROWTH_PER_WAVE) * BOSS_ATTACK_MULTIPLIER
-
-    def update(self, player_pos, obstacles, neighbors):
-        dx = player_pos[0] - self.pos_x
-        dy = player_pos[1] - self.pos_y
-        dist = math.hypot(dx, dy)
-        dir_x, dir_y = (dx / dist, dy / dist) if dist > 0 else (0.0, 0.0)
-        move_x, move_y = dir_x * self.speed, dir_y * self.speed
-
-        move_rect = pygame.Rect(0, 0, BOSS_SIZE, BOSS_SIZE)
-        move_rect.center = (self.pos_x, self.pos_y)
-        move_rect = move_with_collision(move_rect, move_x, move_y, obstacles)
-
-        self.pos_x, self.pos_y = float(move_rect.centerx), float(move_rect.centery)
-        self.rect.center = (int(self.pos_x), int(self.pos_y))
-
-class GameHUD:
-    def __init__(self, screen_w, screen_h):
-        self.screen_w = screen_w
-        self.screen_h = screen_h
-
-    def _draw_panel(self, surface, rect, bg_color, border_color=(15, 15, 20), depth=3):
-        x, y, w, h = rect
-        pygame.draw.rect(surface, border_color, (x, y + depth, w, h), border_radius=6)
-        pygame.draw.rect(surface, bg_color, (x, y, w, h), border_radius=6)
-        pygame.draw.rect(surface, border_color, (x, y, w, h), width=2, border_radius=6)
-
-    def draw(self, screen, stats, current_wave, wave_timer_ratio, theme_name, boss, font_sm, font_md, font_lg):
-        panel_x, panel_y = 20, 20
-        panel_w, panel_h = 290, 90
-        self._draw_panel(screen, (panel_x, panel_y, panel_w, panel_h), (35, 38, 50))
-
-        self._draw_panel(screen, (panel_x + 10, panel_y + 10, 45, 45), (255, 200, 0))
-        lvl_surf = font_lg.render(str(stats.level), True, (20, 20, 20))
-        screen.blit(lvl_surf, (panel_x + 32 - lvl_surf.get_width()//2, panel_y + 32 - lvl_surf.get_height()//2))
-
-        bar_x, bar_w = panel_x + 65, 210
-        self._draw_panel(screen, (bar_x, panel_y + 15, bar_w, 20), (50, 20, 25))
-
-        tot_cap = max(stats.max_hp, stats.hp + stats.armor_hp)
-        inner_w = bar_w - 4
-
-        hp_w = int(inner_w * (stats.hp / tot_cap)) if tot_cap > 0 else 0
-        if hp_w > 0:
-            pygame.draw.rect(screen, (230, 50, 60), (bar_x + 2, panel_y + 17, hp_w, 16), border_radius=3)
-
-        if stats.armor_hp > 0:
-            arm_color = ARMOR_TIERS[stats.armor_tier]["color"] if stats.armor_tier in ARMOR_TIERS else (255, 255, 255)
-            arm_w = int(inner_w * (stats.armor_hp / tot_cap))
-            arm_x = bar_x + 2 + hp_w
-            if arm_x + arm_w > bar_x + 2 + inner_w:
-                arm_w = (bar_x + 2 + inner_w) - arm_x
-            if arm_w > 0:
-                pygame.draw.rect(screen, arm_color, (arm_x, panel_y + 17, arm_w, 16), border_radius=3)
-
-        text_str = f"{int(stats.hp)} + {int(stats.armor_hp)} ARM" if stats.armor_hp > 0 else f"{int(stats.hp)}/{int(stats.max_hp)}"
-        screen.blit(font_sm.render(text_str, True, (255, 255, 255)), (bar_x + 40, panel_y + 16))
-
-        self._draw_panel(screen, (bar_x, panel_y + 45, bar_w, 14), (10, 50, 70))
-        exp_w = int(inner_w * (stats.exp / stats.exp_to_next_level)) if stats.exp_to_next_level > 0 else 0
-        if exp_w > 0:
-            pygame.draw.rect(screen, (0, 210, 255), (bar_x + 2, panel_y + 47, exp_w, 10), border_radius=3)
-
-        wave_w = 220
-        wave_x = (self.screen_w - wave_w) // 2
-        self._draw_panel(screen, (wave_x, 15, wave_w, 50), (30, 30, 40))
-        wave_str = "⚠️ BOSS WAVE" if current_wave % 5 == 0 else f"WAVE {current_wave}"
-        w_surf = font_md.render(wave_str, True, (255, 50, 50) if current_wave % 5 == 0 else (255, 200, 0))
-        screen.blit(w_surf, (wave_x + (wave_w - w_surf.get_width()) // 2, 18))
-
-        theme_surf = font_sm.render(f"Map: {theme_name}", True, (200, 210, 200))
-        screen.blit(theme_surf, (wave_x + (wave_w - theme_surf.get_width()) // 2, 42))
-
-        timer_w = int((wave_w - 20) * wave_timer_ratio)
-        if timer_w > 0:
-            pygame.draw.rect(screen, (255, 100, 0), (wave_x + 10, 58, timer_w, 4), border_radius=2)
-
-        if boss is not None:
-            boss_w = 320
-            boss_x = (self.screen_w - boss_w) // 2
-            self._draw_panel(screen, (boss_x, 70, boss_w, 26), (40, 15, 15))
-            ratio = max(0.0, boss.hp / boss.max_hp)
-            fill_w = int((boss_w - 8) * ratio)
-            if fill_w > 0:
-                pygame.draw.rect(screen, (220, 20, 40), (boss_x + 4, 74, fill_w, 18), border_radius=3)
-            label = font_sm.render("BOSS", True, (255, 255, 255))
-            screen.blit(label, (boss_x + boss_w // 2 - label.get_width() // 2, 76))
-
-        card_w, card_h = 240, 70
-        wx, wy = self.screen_w - card_w - 20, self.screen_h - card_h - 20
-        self._draw_panel(screen, (wx, wy, card_w, card_h), (30, 32, 45))
-        pygame.draw.rect(screen, stats.weapon.color, (wx, wy, card_w, card_h), width=2, border_radius=6)
-
-        screen.blit(font_md.render(stats.weapon.display_name, True, stats.weapon.color), (wx + 10, wy + 8))
-        d_text = f"DMG:{int(stats.weapon.damage)} | Shots:{stats.weapon.shot_count} | Pierce:{stats.weapon.pierce}"
-        screen.blit(font_sm.render(d_text, True, (200, 200, 200)), (wx + 10, wy + 38))
 
 class GameSession:
+    """Bundles all the mutable state for one playthrough so it can be
+    rebuilt wholesale after death / restart."""
     def __init__(self):
         self.stats = PlayerStats()
         self.bullets = pygame.sprite.Group()
@@ -524,35 +61,6 @@ class GameSession:
         self.effect_flash_timer = 0.0
         self.particles = []
 
-def draw_scrolling_grid(screen, cam_x, cam_y, theme):
-    grid_color = theme["grid"]
-    start_x = -(cam_x % GRID_SIZE)
-    x = start_x
-    while x < SCREEN_WIDTH:
-        pygame.draw.line(screen, grid_color, (x, 0), (x, SCREEN_HEIGHT), 1)
-        x += GRID_SIZE
-
-    start_y = -(cam_y % GRID_SIZE)
-    y = start_y
-    while y < SCREEN_HEIGHT:
-        pygame.draw.line(screen, grid_color, (0, y), (SCREEN_WIDTH, y), 1)
-        y += GRID_SIZE
-
-    map_rect = pygame.Rect(0 - cam_x, 0 - cam_y, MAP_WIDTH, MAP_HEIGHT)
-    pygame.draw.rect(screen, (80, 95, 75), map_rect, width=4)
-
-def draw_obstacle(screen, ob_rect, cam_x, cam_y, theme):
-    ox, oy = ob_rect.x - cam_x, ob_rect.y - cam_y
-    pygame.draw.rect(screen, (20, 18, 15), (ox + 4, oy + 8, ob_rect.width, ob_rect.height), border_radius=6)
-    pygame.draw.rect(screen, theme["obstacle"], (ox, oy, ob_rect.width, ob_rect.height), border_radius=6)
-    pygame.draw.rect(screen, theme["obstacle_dark"], (ox, oy, ob_rect.width, ob_rect.height), width=3, border_radius=6)
-
-def draw_floating_bar(screen, cx, cy_top, width, height, ratio, fg_color, bg_color=(40, 15, 20)):
-    x = cx - width // 2
-    pygame.draw.rect(screen, bg_color, (x, cy_top, width, height), border_radius=3)
-    fill_w = int((width - 2) * max(0.0, min(1.0, ratio)))
-    if fill_w > 0:
-        pygame.draw.rect(screen, fg_color, (x + 1, cy_top + 1, fill_w, height - 2), border_radius=2)
 
 async def main():
     pygame.init()
@@ -560,10 +68,17 @@ async def main():
     pygame.display.set_caption("2.5D Block Man vs Zombies")
     clock = pygame.time.Clock()
 
-    font_sm = pygame.font.Font(None, 13)
-    font_md = pygame.font.Font(None, 18)
-    font_lg = pygame.font.Font(None, 26)
-    font_xl = pygame.font.Font(None, 40)
+    # Optional custom font: drop a .ttf into assets/fonts/font.ttf and it
+    # will be picked up automatically; otherwise falls back to the safe
+    # built-in pygame default font (works reliably in the browser/WASM build).
+    FONT_PATH = os.path.join("assets", "fonts", "font.ttf")
+    if not os.path.isfile(FONT_PATH):
+        FONT_PATH = None
+
+    font_sm = pygame.font.Font(FONT_PATH, 13)
+    font_md = pygame.font.Font(FONT_PATH, 18)
+    font_lg = pygame.font.Font(FONT_PATH, 26)
+    font_xl = pygame.font.Font(FONT_PATH, 40)
 
     hud = GameHUD(SCREEN_WIDTH, SCREEN_HEIGHT)
 
@@ -574,6 +89,12 @@ async def main():
     talent_options = []
 
     joy_state = {"active": False, "offset": [0.0, 0.0]}
+
+    settings = {"master_volume": 0.7}
+    pause_buttons = []
+    pause_slider_rect = None
+    pause_button_rect = None
+    dragging_volume = False
 
     final_stats_snapshot = {"wave": 1, "level": 1}
 
@@ -607,7 +128,7 @@ async def main():
             game_state = "PLAYING"
 
     def handle_pointer_down(pos):
-        nonlocal game_state, session
+        nonlocal game_state, session, dragging_volume
         if game_state == "INSTRUCTION":
             game_state = "PLAYING"
         elif game_state == "GAME_OVER":
@@ -620,16 +141,40 @@ async def main():
                 if pygame.Rect(bx, by, 200, 240).collidepoint(pos):
                     confirm_talent(idx)
                     break
+        elif game_state == "PAUSED":
+            for idx, rect in enumerate(pause_buttons):
+                if rect.collidepoint(pos):
+                    if idx == 0:
+                        game_state = "PLAYING"
+                    elif idx == 1:
+                        session = GameSession()
+                        game_state = "PLAYING"
+                    elif idx == 2:
+                        session = GameSession()
+                        game_state = "INSTRUCTION"
+                    return
+            if pause_slider_rect and pause_slider_rect.collidepoint(pos):
+                dragging_volume = True
+                ratio = (pos[0] - pause_slider_rect.x) / pause_slider_rect.width
+                settings["master_volume"] = max(0.0, min(1.0, ratio))
         elif game_state == "PLAYING":
-            joystick_handle_down(pos, joy_state)
+            if pause_button_rect and pause_button_rect.collidepoint(pos):
+                game_state = "PAUSED"
+            else:
+                joystick_handle_down(pos, joy_state)
 
     def handle_pointer_move(pos):
         if game_state == "PLAYING":
             joystick_handle_move(pos, joy_state)
+        elif game_state == "PAUSED" and dragging_volume and pause_slider_rect:
+            ratio = (pos[0] - pause_slider_rect.x) / pause_slider_rect.width
+            settings["master_volume"] = max(0.0, min(1.0, ratio))
 
     def handle_pointer_up():
+        nonlocal dragging_volume
         if game_state == "PLAYING":
             joystick_handle_up(joy_state)
+        dragging_volume = False
 
     running = True
     while running:
@@ -640,7 +185,10 @@ async def main():
                 running = False
 
             if event.type == pygame.KEYDOWN:
-                if game_state == "INSTRUCTION":
+                if event.key == pygame.K_ESCAPE and game_state in ("PLAYING", "PAUSED"):
+                    game_state = "PAUSED" if game_state == "PLAYING" else "PLAYING"
+
+                elif game_state == "INSTRUCTION":
                     if event.key in (pygame.K_RETURN, pygame.K_SPACE):
                         game_state = "PLAYING"
 
@@ -689,7 +237,7 @@ async def main():
 
             move_dir_x = move_dir_y = None
             speed_scale = 1.0
-            if joy_mag > JOY_DEADZONE:
+            if joy_mag > 0.15:
                 move_dir_x, move_dir_y = joy_dx, joy_dy
                 speed_scale = joy_mag
             elif kb_dx != 0 or kb_dy != 0:
@@ -799,12 +347,7 @@ async def main():
             for z in zombies:
                 z.update(player_pos, obstacles, zombies)
 
-            for p in session.particles[:]:
-                p["age"] += dt
-                p["x"] += p["vx"] * dt
-                p["y"] += p["vy"] * dt
-                if p["age"] >= p["life"]:
-                    session.particles.remove(p)
+            update_particles(session.particles, dt)
             if session.effect_flash_timer > 0:
                 session.effect_flash_timer = max(0.0, session.effect_flash_timer - dt)
 
@@ -825,16 +368,7 @@ async def main():
                                 stats.weapon.upgrade_tier()
                                 stats.weapon.upgrade_tier()
                                 session.effect_flash_timer = EFFECT_FLASH_DURATION
-                                for _ in range(28):
-                                    ang = random.uniform(0, 360)
-                                    spd = random.uniform(80, 240)
-                                    session.particles.append({
-                                        "x": death_x, "y": death_y,
-                                        "vx": math.cos(math.radians(ang)) * spd,
-                                        "vy": math.sin(math.radians(ang)) * spd,
-                                        "age": 0.0, "life": random.uniform(0.4, 0.9),
-                                        "color": random.choice([(255, 215, 0), (255, 90, 90), (255, 255, 255)])
-                                    })
+                                spawn_boss_kill_particles(session.particles, death_x, death_y)
                             else:
                                 stats.exp += 12.5
 
@@ -872,7 +406,7 @@ async def main():
         cam_x = player_pos[0] - SCREEN_WIDTH // 2
         cam_y = player_pos[1] - SCREEN_HEIGHT // 2
 
-        if game_state in ("PLAYING", "TALENT_SELECT", "GAME_OVER"):
+        if game_state in ("PLAYING", "TALENT_SELECT", "GAME_OVER", "PAUSED"):
             draw_scrolling_grid(screen, cam_x, cam_y, theme)
 
             render_objects = []
@@ -910,13 +444,7 @@ async def main():
                 elif obj[1] == "obstacle":
                     draw_obstacle(screen, obj[2], cam_x, cam_y, theme)
 
-            for p in session.particles:
-                alpha = max(0, 255 - int(255 * (p["age"] / p["life"])))
-                radius = 3 + int(6 * (p["age"] / p["life"]))
-                if alpha > 0:
-                    particle_surf = pygame.Surface((radius * 2, radius * 2), pygame.SRCALPHA)
-                    pygame.draw.circle(particle_surf, (*p["color"], alpha), (radius, radius), radius)
-                    screen.blit(particle_surf, (p["x"] - cam_x - radius, p["y"] - cam_y - radius))
+            draw_particles(screen, session.particles, cam_x, cam_y)
 
             boss_for_hud = next((z for z in zombies if getattr(z, "is_boss", False)), None)
             hud.draw(screen, stats, session.current_wave, session.wave_timer / 30.0,
@@ -928,14 +456,16 @@ async def main():
                     warn_surf = font_xl.render("⚠ BOSS INCOMING ⚠", True, (255, 50, 50))
                     screen.blit(warn_surf, ((SCREEN_WIDTH - warn_surf.get_width()) // 2, 220))
 
-            if session.effect_flash_timer > 0:
-                flash_alpha = int(200 * (session.effect_flash_timer / EFFECT_FLASH_DURATION))
-                flash_surf = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
-                flash_surf.fill((255, 235, 150, flash_alpha))
-                screen.blit(flash_surf, (0, 0))
+            draw_effect_flash(screen, session.effect_flash_timer, SCREEN_WIDTH, SCREEN_HEIGHT)
 
             if game_state == "PLAYING":
                 draw_joystick(screen, joy_state)
+                pause_button_rect = draw_pause_button(screen, SCREEN_WIDTH)
+
+        if game_state == "PAUSED":
+            pause_buttons, pause_slider_rect = draw_pause_menu(
+                screen, SCREEN_WIDTH, SCREEN_HEIGHT, font_lg, font_md, font_sm, settings
+            )
 
         if game_state == "TALENT_SELECT":
             overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
@@ -1005,6 +535,7 @@ async def main():
 
     pygame.quit()
     sys.exit()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
