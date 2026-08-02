@@ -17,10 +17,10 @@ PLAYER_SPAWN_CLEAR_RADIUS = 260
 
 THEME_WAVES = 5
 MAP_THEMES = [
-    {"name": "青草原野", "floor": (45, 60, 40),  "grid": (55, 72, 50),   "obstacle": (150, 110, 70),  "obstacle_dark": (100, 70, 40),  "ob_size": 90, "ob_count": 18},
-    {"name": "廢棄倉庫", "floor": (52, 52, 58),  "grid": (66, 66, 74),   "obstacle": (120, 120, 130), "obstacle_dark": (80, 80, 92),   "ob_size": 110, "ob_count": 14},
-    {"name": "沙漠遺跡", "floor": (92, 76, 50),  "grid": (108, 90, 60),  "obstacle": (185, 150, 100), "obstacle_dark": (135, 105, 68), "ob_size": 70, "ob_count": 24},
-    {"name": "冰雪凍原", "floor": (58, 68, 84),  "grid": (74, 84, 100),  "obstacle": (205, 222, 235), "obstacle_dark": (150, 172, 190),"ob_size": 100, "ob_count": 16},
+    {"name": "Grassy Plains", "floor": (45, 60, 40),  "grid": (55, 72, 50),   "obstacle": (150, 110, 70),  "obstacle_dark": (100, 70, 40),  "ob_size": 90, "ob_count": 18},
+    {"name": "Abandoned Warehouse", "floor": (52, 52, 58),  "grid": (66, 66, 74),   "obstacle": (120, 120, 130), "obstacle_dark": (80, 80, 92),   "ob_size": 110, "ob_count": 14},
+    {"name": "Desert Ruins", "floor": (92, 76, 50),  "grid": (108, 90, 60),  "obstacle": (185, 150, 100), "obstacle_dark": (135, 105, 68), "ob_size": 70, "ob_count": 24},
+    {"name": "Frozen Tundra", "floor": (58, 68, 84),  "grid": (74, 84, 100),  "obstacle": (205, 222, 235), "obstacle_dark": (150, 172, 190),"ob_size": 100, "ob_count": 16},
 ]
 
 BOSS_WARNING_DURATION = 3.0
@@ -39,7 +39,7 @@ JOY_DEADZONE = 0.15
 
 WEAPON_TYPES = {
     "rifle": {
-        "name": "突擊步槍",
+        "name": "Assault Rifle",
         "base_damage": 7.5,
         "base_fire_rate": 0.2,
         "base_shots": 1,
@@ -49,7 +49,7 @@ WEAPON_TYPES = {
         "max_range": 450,
     },
     "shotgun": {
-        "name": "散彈獵槍",
+        "name": "Shotgun",
         "base_damage": 5,
         "base_fire_rate": 0.6,
         "base_shots": 5,
@@ -59,7 +59,7 @@ WEAPON_TYPES = {
         "max_range": 250,
     },
     "sniper": {
-        "name": "重型貫穿槍",
+        "name": "Heavy Sniper",
         "base_damage": 27.5,
         "base_fire_rate": 1.0,
         "base_shots": 1,
@@ -69,7 +69,7 @@ WEAPON_TYPES = {
         "max_range": 700,
     },
     "grenade": {
-        "name": "榴彈發射器",
+        "name": "Grenade Launcher",
         "base_damage": 20,
         "base_fire_rate": 1.2,
         "base_shots": 1,
@@ -81,27 +81,27 @@ WEAPON_TYPES = {
 }
 
 WEAPON_TIERS = {
-    "精良": {"lvl": 1, "color": (50, 205, 50),   "dmg_m": 1.2, "fr_m": 0.9, "add_p": 0, "add_s": 0},
-    "史詩": {"lvl": 2, "color": (147, 112, 219), "dmg_m": 1.5, "fr_m": 0.8, "add_p": 1, "add_s": 0},
-    "聖級": {"lvl": 3, "color": (255, 215, 0),   "dmg_m": 2.0, "fr_m": 0.7, "add_p": 1, "add_s": 1},
-    "王級": {"lvl": 4, "color": (255, 140, 0),   "dmg_m": 2.8, "fr_m": 0.6, "add_p": 2, "add_s": 2},
-    "帝級": {"lvl": 5, "color": (220, 20, 60),   "dmg_m": 4.0, "fr_m": 0.5, "add_p": 3, "add_s": 3},
-    "神級": {"lvl": 6, "color": (0, 255, 255),   "dmg_m": 6.5, "fr_m": 0.35, "add_p": 99, "add_s": 4}
+    "Fine": {"lvl": 1, "color": (50, 205, 50),   "dmg_m": 1.2, "fr_m": 0.9, "add_p": 0, "add_s": 0},
+    "Epic": {"lvl": 2, "color": (147, 112, 219), "dmg_m": 1.5, "fr_m": 0.8, "add_p": 1, "add_s": 0},
+    "Sacred": {"lvl": 3, "color": (255, 215, 0),   "dmg_m": 2.0, "fr_m": 0.7, "add_p": 1, "add_s": 1},
+    "Royal": {"lvl": 4, "color": (255, 140, 0),   "dmg_m": 2.8, "fr_m": 0.6, "add_p": 2, "add_s": 2},
+    "Imperial": {"lvl": 5, "color": (220, 20, 60),   "dmg_m": 4.0, "fr_m": 0.5, "add_p": 3, "add_s": 3},
+    "Divine": {"lvl": 6, "color": (0, 255, 255),   "dmg_m": 6.5, "fr_m": 0.35, "add_p": 99, "add_s": 4}
 }
 
 ARMOR_TIERS = {
-    1: {"name": "木質積木甲", "color": (220, 220, 220), "value": 30, "reduction": 0.10},
-    2: {"name": "鐵合金積木甲", "color": (180, 220, 255), "value": 60, "reduction": 0.20},
-    3: {"name": "黃金合金積木甲", "color": (255, 235, 150), "value": 100, "reduction": 0.35},
-    4: {"name": "振金鑽石積木甲", "color": (230, 180, 255), "value": 150, "reduction": 0.50},
+    1: {"name": "Wooden Block Armor", "color": (220, 220, 220), "value": 30, "reduction": 0.10},
+    2: {"name": "Iron Alloy Block Armor", "color": (180, 220, 255), "value": 60, "reduction": 0.20},
+    3: {"name": "Gold Alloy Block Armor", "color": (255, 235, 150), "value": 100, "reduction": 0.35},
+    4: {"name": "Vibranium Diamond Block Armor", "color": (230, 180, 255), "value": 150, "reduction": 0.50},
 }
 
 TALENT_POOL = [
-    {"id": "add_armor", "name": "裝備空投鎧甲", "desc": "隨機獲得一套高階白色護甲", "max_rank": 5},
-    {"id": "hp_up", "name": "體力增強", "desc": "最大生命值 +25，並回復 25 HP", "max_rank": 3},
-    {"id": "speed_up", "name": "輕裝上陣", "desc": "移動速度 +12%", "max_rank": 3},
-    {"id": "weapon_tier_up", "name": "武器突破", "desc": "提高當前武器一階品質！", "max_rank": 5},
-    {"id": "switch_weapon", "name": "更換武器款式", "desc": "隨機更換為其他武器類型", "max_rank": 5},
+    {"id": "add_armor", "name": "Armor Airdrop", "desc": "Randomly gain a high-tier armor set", "max_rank": 5},
+    {"id": "hp_up", "name": "Vitality Boost", "desc": "Max HP +25, and restore 25 HP", "max_rank": 3},
+    {"id": "speed_up", "name": "Light Footwork", "desc": "Move speed +12%", "max_rank": 3},
+    {"id": "weapon_tier_up", "name": "Weapon Breakthrough", "desc": "Upgrade current weapon by one tier!", "max_rank": 5},
+    {"id": "switch_weapon", "name": "Switch Weapon", "desc": "Randomly switch to another weapon type", "max_rank": 5},
 ]
 
 TALENT_WEIGHTS = {
@@ -217,7 +217,7 @@ def draw_joystick(screen, joy_state):
     screen.blit(knob_surf, (knob_x, knob_y))
 
 class Weapon:
-    def __init__(self, type_id="rifle", tier_name="精良"):
+    def __init__(self, type_id="rifle", tier_name="Fine"):
         self.type_id = type_id
         self.type_data = WEAPON_TYPES[type_id]
         self.tier_name = tier_name
@@ -278,7 +278,7 @@ class PlayerStats:
         self.max_armor_hp = 0
         self.damage_reduction = 0.0
 
-        self.weapon = Weapon("rifle", "精良")
+        self.weapon = Weapon("rifle", "Fine")
 
     def equip_armor(self, tier):
         tier_info = ARMOR_TIERS[tier]
@@ -471,7 +471,7 @@ class GameHUD:
         w_surf = font_md.render(wave_str, True, (255, 50, 50) if current_wave % 5 == 0 else (255, 200, 0))
         screen.blit(w_surf, (wave_x + (wave_w - w_surf.get_width()) // 2, 18))
 
-        theme_surf = font_sm.render(f"地圖：{theme_name}", True, (200, 210, 200))
+        theme_surf = font_sm.render(f"Map: {theme_name}", True, (200, 210, 200))
         screen.blit(theme_surf, (wave_x + (wave_w - theme_surf.get_width()) // 2, 42))
 
         timer_w = int((wave_w - 20) * wave_timer_ratio)
@@ -495,7 +495,7 @@ class GameHUD:
         pygame.draw.rect(screen, stats.weapon.color, (wx, wy, card_w, card_h), width=2, border_radius=6)
 
         screen.blit(font_md.render(stats.weapon.display_name, True, stats.weapon.color), (wx + 10, wy + 8))
-        d_text = f"傷害:{int(stats.weapon.damage)} | 彈數:{stats.weapon.shot_count} | 貫穿:{stats.weapon.pierce}"
+        d_text = f"DMG:{int(stats.weapon.damage)} | Shots:{stats.weapon.shot_count} | Pierce:{stats.weapon.pierce}"
         screen.blit(font_sm.render(d_text, True, (200, 200, 200)), (wx + 10, wy + 38))
 
 class GameSession:
@@ -557,14 +557,13 @@ def draw_floating_bar(screen, cx, cy_top, width, height, ratio, fg_color, bg_col
 async def main():
     pygame.init()
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-    pygame.display.set_caption("2.5D 積木人大戰殭屍")
+    pygame.display.set_caption("2.5D Block Man vs Zombies")
     clock = pygame.time.Clock()
 
-    FONT_PATH = "font.ttf"
-    font_sm = pygame.font.Font(FONT_PATH, 13)
-    font_md = pygame.font.Font(FONT_PATH, 18)
-    font_lg = pygame.font.Font(FONT_PATH, 26)
-    font_xl = pygame.font.Font(FONT_PATH, 40)
+    font_sm = pygame.font.Font(None, 13)
+    font_md = pygame.font.Font(None, 18)
+    font_lg = pygame.font.Font(None, 26)
+    font_xl = pygame.font.Font(None, 40)
 
     hud = GameHUD(SCREEN_WIDTH, SCREEN_HEIGHT)
 
@@ -926,7 +925,7 @@ async def main():
             if session.boss_warning_timer > 0:
                 blink = math.sin(pygame.time.get_ticks() * 0.02) > 0
                 if blink:
-                    warn_surf = font_xl.render("⚠ BOSS 來襲 ⚠", True, (255, 50, 50))
+                    warn_surf = font_xl.render("⚠ BOSS INCOMING ⚠", True, (255, 50, 50))
                     screen.blit(warn_surf, ((SCREEN_WIDTH - warn_surf.get_width()) // 2, 220))
 
             if session.effect_flash_timer > 0:
@@ -943,11 +942,11 @@ async def main():
             overlay.fill((0, 0, 0, 180))
             screen.blit(overlay, (0, 0))
 
-            title = font_lg.render("🎉 經驗值滿額！請選擇升級天賦", True, (255, 215, 0))
+            title = font_lg.render("🎉 Level Up! Choose a Talent", True, (255, 215, 0))
             screen.blit(title, ((SCREEN_WIDTH - title.get_width()) // 2, 150))
 
             if session.pending_talent_choices > 1:
-                queue_txt = font_sm.render(f"（本次還有 {session.pending_talent_choices - 1} 次選擇等待中）", True, (255, 255, 255))
+                queue_txt = font_sm.render(f"({session.pending_talent_choices - 1} more choices pending)", True, (255, 255, 255))
                 screen.blit(queue_txt, ((SCREEN_WIDTH - queue_txt.get_width()) // 2, 195))
 
             for idx, opt in enumerate(talent_options):
@@ -969,13 +968,13 @@ async def main():
             title = font_lg.render("💀 GAME OVER", True, (255, 60, 60))
             screen.blit(title, ((SCREEN_WIDTH - title.get_width()) // 2, 260))
 
-            stat_line1 = font_md.render(f"存活至第 {final_stats_snapshot['wave']} 波", True, (255, 255, 255))
+            stat_line1 = font_md.render(f"Survived to Wave {final_stats_snapshot['wave']}", True, (255, 255, 255))
             screen.blit(stat_line1, ((SCREEN_WIDTH - stat_line1.get_width()) // 2, 330))
 
-            stat_line2 = font_md.render(f"角色等級 Lv.{final_stats_snapshot['level']}", True, (255, 255, 255))
+            stat_line2 = font_md.render(f"Character Level Lv.{final_stats_snapshot['level']}", True, (255, 255, 255))
             screen.blit(stat_line2, ((SCREEN_WIDTH - stat_line2.get_width()) // 2, 365))
 
-            restart_txt = font_md.render("【 按 ENTER / SPACE 或點擊畫面 重新開始 】", True, (0, 255, 200))
+            restart_txt = font_md.render("[ Press ENTER / SPACE or Tap Screen to Restart ]", True, (0, 255, 200))
             screen.blit(restart_txt, ((SCREEN_WIDTH - restart_txt.get_width()) // 2, 430))
 
         if game_state == "INSTRUCTION":
@@ -986,19 +985,19 @@ async def main():
             pygame.draw.rect(screen, (35, 40, 55), (212, 184, 600, 400), border_radius=12)
             pygame.draw.rect(screen, (255, 215, 0), (212, 184, 600, 400), width=3, border_radius=12)
 
-            screen.blit(font_lg.render("🎮 2.5D 積木人大戰殭屍 - 操作說明", True, (255, 215, 0)), (260, 215))
+            screen.blit(font_lg.render("🎮 2.5D Block Man vs Zombies - Instructions", True, (255, 215, 0)), (260, 215))
 
             lines = [
-                "WASD 鍵 / 左下角虛擬搖桿 : 控制移動與角色面向",
-                "自動射擊 : 武器冷卻好會自動瞄準最近的敵人開火",
-                "A / D 鍵 / 手機請直接點擊卡片 : 選擇升級天賦",
-                "武器階級 : 精良 ➔ 史詩 ➔ 聖級 ➔ 王級 ➔ 帝級 ➔ 神級",
-                "每 5 波會切換地圖主題，並有一隻 BOSS 來襲"
+                "WASD keys / bottom-left virtual joystick: move and face direction",
+                "Auto-fire: weapon automatically aims and fires at the nearest enemy when off cooldown",
+                "A / D keys / on mobile tap the card directly: choose a talent upgrade",
+                "Weapon tiers: Fine \u2794 Epic \u2794 Sacred \u2794 Royal \u2794 Imperial \u2794 Divine",
+                "Every 5 waves the map theme changes and a BOSS appears"
             ]
             for i, line in enumerate(lines):
                 screen.blit(font_md.render(f"• {line}", True, (220, 220, 220)), (250, 280 + i * 38))
 
-            start_txt = font_md.render("【 按 ENTER / SPACE 或點擊畫面 開始遊戲 】", True, (0, 255, 200))
+            start_txt = font_md.render("[ Press ENTER / SPACE or Tap Screen to Start ]", True, (0, 255, 200))
             screen.blit(start_txt, ((SCREEN_WIDTH - start_txt.get_width()) // 2, 520))
 
         pygame.display.flip()
