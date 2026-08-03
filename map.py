@@ -3,6 +3,7 @@
 camera-scrolling background rendering."""
 import random
 import math
+import sys
 import pygame
 
 pygame.init()
@@ -10,26 +11,41 @@ pygame.init()
 
 def _detect_screen_size():
     """Picks the game's window/canvas resolution from the device's actual
-    screen shape: a portrait phone (taller than wide) gets a portrait
-    canvas sized to its own aspect ratio, instead of being squeezed into
-    this game's original 1024x768 landscape design. Desktops/laptops
-    (wider than tall) keep that original 1024x768. Falls back to it too if
-    display info isn't available (e.g. some headless/test environments)."""
-    try:
-        info = pygame.display.Info()
-        avail_w, avail_h = info.current_w, info.current_h
-    except pygame.error:
-        avail_w, avail_h = 0, 0
+    screen shape: a portrait phone (taller than wide) gets a canvas that
+    exactly matches its own reported width/height, so the game is flush
+    with the screen edges instead of being squeezed into this game's
+    original 1024x768 landscape design. Desktops/laptops (wider than
+    tall) keep that original 1024x768. Falls back to it too if display
+    info isn't available (e.g. some headless/test environments)."""
+    avail_w, avail_h = 0, 0
+
+    # In the pygbag/browser build, main.py (and this module) runs BEFORE
+    # the page's own window_resize() call (see index.html's custom_site()),
+    # so pygame.display.Info() can still report a stale/placeholder size
+    # at this point. window.innerWidth/innerHeight reflect the browser's
+    # real viewport immediately, in the same CSS pixels the rest of the
+    # UI's fixed pixel sizes assume - ask the DOM directly when available.
+    if sys.platform == "emscripten":
+        try:
+            import platform as browser
+            avail_w = int(browser.window.innerWidth)
+            avail_h = int(browser.window.innerHeight)
+        except Exception:
+            avail_w, avail_h = 0, 0
+
+    if avail_w <= 0 or avail_h <= 0:
+        try:
+            info = pygame.display.Info()
+            avail_w, avail_h = info.current_w, info.current_h
+        except pygame.error:
+            avail_w, avail_h = 0, 0
 
     if avail_w <= 0 or avail_h <= 0 or avail_w >= avail_h:
         return 1024, 768
 
-    # Portrait device: keep its aspect ratio, capped to a sane max width so
-    # UI text/buttons (sized around a ~1024px-wide design) don't shrink
-    # down to a tiny native phone pixel width.
-    width = min(avail_w, 540)
-    height = int(width * (avail_h / avail_w))
-    return width, height
+    # Portrait device: use the reported width/height as-is so the canvas
+    # is flush with the screen edges on every phone.
+    return avail_w, avail_h
 
 
 SCREEN_WIDTH, SCREEN_HEIGHT = _detect_screen_size()
