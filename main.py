@@ -128,6 +128,15 @@ async def main():
     dragging_volume = False
     dragging_weapon_info = False
     weapon_info_drag_last_y = 0
+    # On touchscreens, the browser/SDL layer fires a synthetic MOUSEBUTTONDOWN
+    # (and MOUSEMOTION/MOUSEBUTTONUP) alongside every real FINGERDOWN, so a
+    # single tap was calling handle_pointer_down() twice - e.g. the language
+    # button toggled forward then immediately back (net no-op with only 2
+    # languages), and "quit to title" fired again right after landing on
+    # INSTRUCTION, bouncing straight into PLAYING. Once any real touch event
+    # is seen, treat the device as touch-only and ignore the synthetic mouse
+    # events entirely (a real touchscreen user never also needs mouse support).
+    used_touch = False
 
     final_stats_snapshot = {"wave": 1, "level": 1}
 
@@ -309,12 +318,16 @@ async def main():
                         game_state = "INSTRUCTION"
 
             elif event.type == pygame.MOUSEBUTTONDOWN:
-                handle_pointer_down(event.pos)
+                if not used_touch:
+                    handle_pointer_down(event.pos)
             elif event.type == pygame.MOUSEMOTION:
-                handle_pointer_move(event.pos)
+                if not used_touch:
+                    handle_pointer_move(event.pos)
             elif event.type == pygame.MOUSEBUTTONUP:
-                handle_pointer_up()
+                if not used_touch:
+                    handle_pointer_up()
             elif event.type == pygame.FINGERDOWN:
+                used_touch = True
                 handle_pointer_down((event.x * SCREEN_WIDTH, event.y * SCREEN_HEIGHT))
             elif event.type == pygame.FINGERMOTION:
                 handle_pointer_move((event.x * SCREEN_WIDTH, event.y * SCREEN_HEIGHT))
