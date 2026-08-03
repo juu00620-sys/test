@@ -431,24 +431,33 @@ class GameHUD:
         narrow = self.screen_w < 700
         margin = 12 if narrow else 20
 
+        # Level / HP / EXP panel: kept anchored to the top-left corner,
+        # just drawn at half its original size.
+        panel_scale = 0.5
         panel_x, panel_y = margin, margin
-        panel_w = min(290, self.screen_w - 2 * margin)
-        panel_h = 90
+        panel_w = min(int(290 * panel_scale), self.screen_w - 2 * margin)
+        panel_h = int(90 * panel_scale)
         self._draw_panel(screen, (panel_x, panel_y, panel_w, panel_h), (35, 38, 50))
 
-        self._draw_panel(screen, (panel_x + 10, panel_y + 10, 45, 45), (255, 200, 0))
-        lvl_surf = font_lg.render(str(stats.level), True, (20, 20, 20))
-        screen.blit(lvl_surf, (panel_x + 32 - lvl_surf.get_width()//2, panel_y + 32 - lvl_surf.get_height()//2))
+        badge = int(45 * panel_scale)
+        badge_pad = int(10 * panel_scale)
+        self._draw_panel(screen, (panel_x + badge_pad, panel_y + badge_pad, badge, badge), (255, 200, 0))
+        lvl_surf = font_sm.render(str(stats.level), True, (20, 20, 20))
+        badge_cx, badge_cy = panel_x + badge_pad + badge // 2, panel_y + badge_pad + badge // 2
+        screen.blit(lvl_surf, (badge_cx - lvl_surf.get_width() // 2, badge_cy - lvl_surf.get_height() // 2))
 
-        bar_x, bar_w = panel_x + 65, panel_w - 80
-        self._draw_panel(screen, (bar_x, panel_y + 15, bar_w, 20), (50, 20, 25))
+        bar_x = panel_x + int(65 * panel_scale)
+        bar_w = panel_w - (bar_x - panel_x) - badge_pad
+        bar1_y, bar1_h = panel_y + int(15 * panel_scale), int(20 * panel_scale)
+        self._draw_panel(screen, (bar_x, bar1_y, bar_w, bar1_h), (50, 20, 25))
 
         tot_cap = max(stats.max_hp, stats.hp + stats.armor_hp)
         inner_w = bar_w - 4
+        fill_y, fill_h = bar1_y + 2, bar1_h - 4
 
         hp_w = int(inner_w * (stats.hp / tot_cap)) if tot_cap > 0 else 0
         if hp_w > 0:
-            pygame.draw.rect(screen, (230, 50, 60), (bar_x + 2, panel_y + 17, hp_w, 16), border_radius=3)
+            pygame.draw.rect(screen, (230, 50, 60), (bar_x + 2, fill_y, hp_w, fill_h), border_radius=3)
 
         if stats.armor_hp > 0:
             arm_color = ARMOR_TIERS[stats.armor_tier]["color"] if stats.armor_tier in ARMOR_TIERS else (255, 255, 255)
@@ -457,16 +466,17 @@ class GameHUD:
             if arm_x + arm_w > bar_x + 2 + inner_w:
                 arm_w = (bar_x + 2 + inner_w) - arm_x
             if arm_w > 0:
-                pygame.draw.rect(screen, arm_color, (arm_x, panel_y + 17, arm_w, 16), border_radius=3)
+                pygame.draw.rect(screen, arm_color, (arm_x, fill_y, arm_w, fill_h), border_radius=3)
 
         text_str = f"{int(stats.hp)} + {int(stats.armor_hp)} ARM" if stats.armor_hp > 0 else f"{int(stats.hp)}/{int(stats.max_hp)}"
-        hp_text_font, hp_text_text = fit_text_1line(self.font_path, text_str, bar_w - 40, FONT_SIZE_SM)
-        screen.blit(hp_text_font.render(hp_text_text, True, (255, 255, 255)), (bar_x + 40, panel_y + 16))
+        hp_text_font, hp_text_text = fit_text_1line(self.font_path, text_str, max(20, bar_w - 20), FONT_SIZE_SM)
+        screen.blit(hp_text_font.render(hp_text_text, True, (255, 255, 255)), (bar_x + int(40 * panel_scale), bar1_y - 1))
 
-        self._draw_panel(screen, (bar_x, panel_y + 45, bar_w, 14), (10, 50, 70))
+        bar2_y, bar2_h = panel_y + int(45 * panel_scale), int(14 * panel_scale)
+        self._draw_panel(screen, (bar_x, bar2_y, bar_w, bar2_h), (10, 50, 70))
         exp_w = int(inner_w * (stats.exp / stats.exp_to_next_level)) if stats.exp_to_next_level > 0 else 0
         if exp_w > 0:
-            pygame.draw.rect(screen, (0, 210, 255), (bar_x + 2, panel_y + 47, exp_w, 10), border_radius=3)
+            pygame.draw.rect(screen, (0, 210, 255), (bar_x + 2, bar2_y + 2, exp_w, bar2_h - 4), border_radius=3)
 
         wave_w = min(220, self.screen_w - 2 * margin)
         wave_x = (self.screen_w - wave_w) // 2
