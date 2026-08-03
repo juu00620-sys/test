@@ -422,15 +422,25 @@ class GameHUD:
         pygame.draw.rect(surface, border_color, (x, y, w, h), width=2, border_radius=6)
 
     def draw(self, screen, stats, current_wave, wave_timer_ratio, theme_name, boss, font_sm, font_md, font_lg, lang="en"):
-        panel_x, panel_y = 20, 20
-        panel_w, panel_h = 290, 90
+        # On a narrow (portrait phone) screen the wave banner used to be
+        # centered at a fixed y=15, which overlaps the top-left level/HP
+        # panel once the screen is too narrow to fit both side by side.
+        # Below that width, stack the wave banner underneath the panel
+        # instead; wide/landscape screens keep the original side-by-side
+        # layout untouched.
+        narrow = self.screen_w < 700
+        margin = 12 if narrow else 20
+
+        panel_x, panel_y = margin, margin
+        panel_w = min(290, self.screen_w - 2 * margin)
+        panel_h = 90
         self._draw_panel(screen, (panel_x, panel_y, panel_w, panel_h), (35, 38, 50))
 
         self._draw_panel(screen, (panel_x + 10, panel_y + 10, 45, 45), (255, 200, 0))
         lvl_surf = font_lg.render(str(stats.level), True, (20, 20, 20))
         screen.blit(lvl_surf, (panel_x + 32 - lvl_surf.get_width()//2, panel_y + 32 - lvl_surf.get_height()//2))
 
-        bar_x, bar_w = panel_x + 65, 210
+        bar_x, bar_w = panel_x + 65, panel_w - 80
         self._draw_panel(screen, (bar_x, panel_y + 15, bar_w, 20), (50, 20, 25))
 
         tot_cap = max(stats.max_hp, stats.hp + stats.armor_hp)
@@ -458,37 +468,42 @@ class GameHUD:
         if exp_w > 0:
             pygame.draw.rect(screen, (0, 210, 255), (bar_x + 2, panel_y + 47, exp_w, 10), border_radius=3)
 
-        wave_w = 220
+        wave_w = min(220, self.screen_w - 2 * margin)
         wave_x = (self.screen_w - wave_w) // 2
-        self._draw_panel(screen, (wave_x, 15, wave_w, 50), (30, 30, 40))
+        wave_y = (panel_y + panel_h + 10) if narrow else 15
+        self._draw_panel(screen, (wave_x, wave_y, wave_w, 50), (30, 30, 40))
         wave_str = t(lang, "boss_wave") if current_wave % 5 == 0 else t(lang, "wave", n=current_wave)
         w_font, w_text = fit_text_1line(self.font_path, wave_str, wave_w - 16, FONT_SIZE_MD)
         w_surf = w_font.render(w_text, True, (255, 50, 50) if current_wave % 5 == 0 else (255, 200, 0))
-        screen.blit(w_surf, (wave_x + (wave_w - w_surf.get_width()) // 2, 18))
+        screen.blit(w_surf, (wave_x + (wave_w - w_surf.get_width()) // 2, wave_y + 3))
 
         map_str = t(lang, "map", name=map_theme_name(lang, theme_name))
         theme_font, theme_text = fit_text_1line(self.font_path, map_str, wave_w - 16, FONT_SIZE_SM)
         theme_surf = theme_font.render(theme_text, True, (200, 210, 200))
-        screen.blit(theme_surf, (wave_x + (wave_w - theme_surf.get_width()) // 2, 42))
+        screen.blit(theme_surf, (wave_x + (wave_w - theme_surf.get_width()) // 2, wave_y + 27))
 
         timer_w = int((wave_w - 20) * wave_timer_ratio)
         if timer_w > 0:
-            pygame.draw.rect(screen, (255, 100, 0), (wave_x + 10, 58, timer_w, 4), border_radius=2)
+            pygame.draw.rect(screen, (255, 100, 0), (wave_x + 10, wave_y + 43, timer_w, 4), border_radius=2)
 
         if boss is not None:
-            boss_w = 320
+            boss_w = min(320, self.screen_w - 2 * margin)
             boss_x = (self.screen_w - boss_w) // 2
-            self._draw_panel(screen, (boss_x, 70, boss_w, 26), (40, 15, 15))
+            boss_y = wave_y + 55
+            self._draw_panel(screen, (boss_x, boss_y, boss_w, 26), (40, 15, 15))
             ratio = max(0.0, boss.hp / boss.max_hp)
             fill_w = int((boss_w - 8) * ratio)
             if fill_w > 0:
-                pygame.draw.rect(screen, (220, 20, 40), (boss_x + 4, 74, fill_w, 18), border_radius=3)
+                pygame.draw.rect(screen, (220, 20, 40), (boss_x + 4, boss_y + 4, fill_w, 18), border_radius=3)
             boss_font, boss_text = fit_text_1line(self.font_path, t(lang, "boss"), boss_w - 16, FONT_SIZE_SM)
             label = boss_font.render(boss_text, True, (255, 255, 255))
-            screen.blit(label, (boss_x + boss_w // 2 - label.get_width() // 2, 76))
+            screen.blit(label, (boss_x + boss_w // 2 - label.get_width() // 2, boss_y + 6))
 
-        card_w, card_h = 240, 70
-        wx, wy = self.screen_w - card_w - 20, self.screen_h - card_h - 20
+        # Weapon card: shrunk on narrow screens so it clears the (also
+        # smaller, see player.py) joystick in the opposite bottom corner.
+        card_scale = 0.8 if narrow else 1.0
+        card_w, card_h = int(240 * card_scale), int(70 * card_scale)
+        wx, wy = self.screen_w - card_w - margin, self.screen_h - card_h - margin
         self._draw_panel(screen, (wx, wy, card_w, card_h), (30, 32, 45))
         pygame.draw.rect(screen, stats.weapon.color, (wx, wy, card_w, card_h), width=2, border_radius=6)
 

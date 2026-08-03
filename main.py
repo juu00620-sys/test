@@ -593,7 +593,11 @@ async def main():
 
             if game_state == "PLAYING":
                 draw_joystick(screen, joy_state)
-                pause_button_rect = draw_pause_button(screen, SCREEN_WIDTH)
+                pause_button_rect = draw_pause_button(
+                    screen, SCREEN_WIDTH,
+                    margin=(12 if SCREEN_WIDTH < 700 else 16),
+                    size=(38 if SCREEN_WIDTH < 700 else 44),
+                )
 
         if game_state == "PAUSED":
             pause_buttons, pause_slider_rect, pause_lang_button_rect = draw_pause_menu(

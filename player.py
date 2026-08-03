@@ -2,7 +2,7 @@
 """Player stats, armor data, and virtual-joystick input handling."""
 import math
 
-from map import SCREEN_HEIGHT
+from map import SCREEN_WIDTH, SCREEN_HEIGHT
 from weapon import Weapon
 
 ARMOR_TIERS = {
@@ -33,10 +33,16 @@ AIRDROP_TYPE_BY_TIER = {
     4: "exp",         # Vibranium Diamond -> exp gain
 }
 
-# Virtual joystick (bottom-left, mouse/touch both work)
-JOY_BASE_POS = (120, SCREEN_HEIGHT - 140)
-JOY_BASE_RADIUS = 70
-JOY_KNOB_RADIUS = 32
+# Virtual joystick (bottom-left, mouse/touch both work). Scaled down on
+# narrow (portrait phone) screens - at the original fixed size it would
+# eat a big chunk of a phone-width screen and crowd the weapon info card
+# in the opposite corner.
+_JOY_SCALE = max(0.6, min(1.0, SCREEN_WIDTH / 700))
+JOY_BASE_RADIUS = int(70 * _JOY_SCALE)
+JOY_KNOB_RADIUS = int(32 * _JOY_SCALE)
+JOY_MARGIN_LEFT = 40
+JOY_MARGIN_BOTTOM = 60
+JOY_BASE_POS = (JOY_MARGIN_LEFT + JOY_BASE_RADIUS, SCREEN_HEIGHT - JOY_MARGIN_BOTTOM - JOY_BASE_RADIUS)
 JOY_DEADZONE = 0.15
 
 
