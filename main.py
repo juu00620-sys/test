@@ -681,23 +681,40 @@ async def main():
             screen.blit(overlay, (0, 0))
 
             panel_w = min(600, SCREEN_WIDTH - 40)
-            panel_h = min(400, SCREEN_HEIGHT - 40)
+
+            title_font, title_text = fit_text_1line(FONT_PATH, t(settings["lang"], "instructions_title"), panel_w - 96, FONT_SIZE_LG)
+            title_h = title_font.get_height()
+
+            lines = instruction_lines(settings["lang"])
+            text_x_offset, text_right_pad = 38, 20
+            avail_w = panel_w - text_x_offset - text_right_pad
+
+            # Measure how tall the instruction list actually renders at
+            # this width/font first (English wraps to more lines than the
+            # Chinese text at the same width), then size the panel around
+            # that instead of a fixed guessed height - this is what was
+            # letting the English text run past the panel's border.
+            top_pad, title_gap, item_gap, bottom_pad = 24, 14, 6, 26
+            content_h = 0
+            for line in lines:
+                content_h += draw_wrapped_text(None, font_md, f"• {line}", (0, 0, 0), 0, 0, avail_w,
+                                                line_gap=4, max_lines=2, dry_run=True) + item_gap
+
+            panel_h = min(top_pad + title_h + title_gap + content_h + bottom_pad, SCREEN_HEIGHT - 40)
             panel_x = (SCREEN_WIDTH - panel_w) // 2
             panel_y = (SCREEN_HEIGHT - panel_h) // 2
             pygame.draw.rect(screen, (35, 40, 55), (panel_x, panel_y, panel_w, panel_h), border_radius=12)
             pygame.draw.rect(screen, (255, 215, 0), (panel_x, panel_y, panel_w, panel_h), width=3, border_radius=12)
 
-            title_font, title_text = fit_text_1line(FONT_PATH, t(settings["lang"], "instructions_title"), panel_w - 96, FONT_SIZE_LG)
-            screen.blit(title_font.render(title_text, True, (255, 215, 0)), (panel_x + 48, panel_y + 31))
+            title_y = panel_y + top_pad
+            screen.blit(title_font.render(title_text, True, (255, 215, 0)), (panel_x + 48, title_y))
 
-            lines = instruction_lines(settings["lang"])
-            text_x = panel_x + 38
-            avail_w = panel_x + panel_w - text_x - 20  # panel's right edge minus the text's x minus right padding
-            cursor_y = panel_y + 96
+            text_x = panel_x + text_x_offset
+            cursor_y = title_y + title_h + title_gap
             for line in lines:
                 used_h = draw_wrapped_text(screen, font_md, f"• {line}", (220, 220, 220), text_x, cursor_y, avail_w,
                                             line_gap=4, max_lines=2)
-                cursor_y += used_h + 8
+                cursor_y += used_h + item_gap
 
             # Drawn below the panel instead of over the last instruction
             # line (they used to overlap), enlarged, and blinking so it

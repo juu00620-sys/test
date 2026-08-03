@@ -103,11 +103,14 @@ def wrap_text(font, text, max_width):
     return lines
 
 
-def draw_wrapped_text(screen, font, text, color, x, y, max_width, line_gap=4, max_lines=None):
+def draw_wrapped_text(screen, font, text, color, x, y, max_width, line_gap=4, max_lines=None, dry_run=False):
     """Draws text wrapped to stay within max_width, starting at (x, y). If
     max_lines is given and there would be more lines than that, the extra
     is cut and the last visible line gets a trailing ellipsis so nothing
-    overflows past that many lines. Returns the total pixel height used."""
+    overflows past that many lines. Returns the total pixel height used.
+    With dry_run=True, computes/returns that height without drawing
+    anything (screen may be None) - lets a caller measure how tall a block
+    of text will be first, to size a container to fit it."""
     lines = wrap_text(font, text, max_width)
     if max_lines is not None and len(lines) > max_lines:
         lines = lines[:max_lines]
@@ -116,8 +119,9 @@ def draw_wrapped_text(screen, font, text, color, x, y, max_width, line_gap=4, ma
             last = last[:-1]
         lines[-1] = (last + "…") if last else "…"
     line_h = font.get_height() + line_gap
-    for i, line in enumerate(lines):
-        screen.blit(font.render(line, True, color), (x, y + i * line_h))
+    if not dry_run:
+        for i, line in enumerate(lines):
+            screen.blit(font.render(line, True, color), (x, y + i * line_h))
     return len(lines) * line_h
 
 
