@@ -21,6 +21,21 @@ def spawn_boss_kill_particles(particles, x, y, count=28):
         })
 
 
+def spawn_explosion_particles(particles, x, y, count=18):
+    """Append a small fiery burst at (x, y), for the grenade launcher's
+    splash-damage explosion."""
+    for _ in range(count):
+        ang = random.uniform(0, 360)
+        spd = random.uniform(60, 180)
+        particles.append({
+            "x": x, "y": y,
+            "vx": math.cos(math.radians(ang)) * spd,
+            "vy": math.sin(math.radians(ang)) * spd,
+            "age": 0.0, "life": random.uniform(0.3, 0.6),
+            "color": random.choice([(255, 140, 0), (255, 60, 0), (255, 220, 80)])
+        })
+
+
 def update_particles(particles, dt):
     """Advance particle age/position in place, removing expired ones."""
     for p in particles[:]:

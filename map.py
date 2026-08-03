@@ -5,8 +5,34 @@ import random
 import math
 import pygame
 
-SCREEN_WIDTH = 1024
-SCREEN_HEIGHT = 768
+pygame.init()
+
+
+def _detect_screen_size():
+    """Picks the game's window/canvas resolution from the device's actual
+    screen shape: a portrait phone (taller than wide) gets a portrait
+    canvas sized to its own aspect ratio, instead of being squeezed into
+    this game's original 1024x768 landscape design. Desktops/laptops
+    (wider than tall) keep that original 1024x768. Falls back to it too if
+    display info isn't available (e.g. some headless/test environments)."""
+    try:
+        info = pygame.display.Info()
+        avail_w, avail_h = info.current_w, info.current_h
+    except pygame.error:
+        avail_w, avail_h = 0, 0
+
+    if avail_w <= 0 or avail_h <= 0 or avail_w >= avail_h:
+        return 1024, 768
+
+    # Portrait device: keep its aspect ratio, capped to a sane max width so
+    # UI text/buttons (sized around a ~1024px-wide design) don't shrink
+    # down to a tiny native phone pixel width.
+    width = min(avail_w, 540)
+    height = int(width * (avail_h / avail_w))
+    return width, height
+
+
+SCREEN_WIDTH, SCREEN_HEIGHT = _detect_screen_size()
 MAP_WIDTH = 2400
 MAP_HEIGHT = 1800
 

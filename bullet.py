@@ -7,7 +7,9 @@ from map import MAP_WIDTH, MAP_HEIGHT
 
 
 class Bullet(pygame.sprite.Sprite):
-    def __init__(self, x, y, angle_deg, damage, speed, pierce, color, tier_lvl, max_range):
+    def __init__(self, x, y, angle_deg, damage, speed, pierce, color, tier_lvl, max_range,
+                 explosive=False, explosion_radius=0, explosion_damage=0.0,
+                 burn_dps=0.0, burn_duration=0.0):
         super().__init__()
         radius = 4 + tier_lvl
         self.image = pygame.Surface((radius * 2, radius * 2), pygame.SRCALPHA)
@@ -25,6 +27,14 @@ class Bullet(pygame.sprite.Sprite):
 
         self.start_x, self.start_y = float(x), float(y)
         self.max_range = max_range
+
+        # Optional splash-damage-on-impact + burn-over-time, used by
+        # explosive weapons (e.g. the Grenade Launcher). Inert by default.
+        self.explosive = explosive
+        self.explosion_radius = explosion_radius
+        self.explosion_damage = explosion_damage
+        self.burn_dps = burn_dps
+        self.burn_duration = burn_duration
 
     def update(self, dt):
         self.pos_x += self.vx

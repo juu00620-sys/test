@@ -5,3 +5,4 @@
 *.tar.gz binary
 *.png binary
 *.jpg binary
+* text=auto eol=lf

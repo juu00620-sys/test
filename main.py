@@ -20,17 +20,43 @@ from player import (
 from zombie import (
     Zombie, Boss,
     BOSS_WARNING_DURATION, BOSS_HP_MULTIPLIER, BOSS_ATTACK_MULTIPLIER,
+    draw_boss_meteors,
 )
 from bullet import Bullet
 from effects import (
     EFFECT_FLASH_DURATION,
-    spawn_boss_kill_particles, update_particles, draw_particles, draw_effect_flash,
+    spawn_boss_kill_particles, spawn_explosion_particles, update_particles, draw_particles, draw_effect_flash,
 )
 from ui import (
     GameHUD, draw_joystick, draw_floating_bar,
-    draw_pause_button, draw_pause_menu,
-    TALENT_POOL, TALENT_WEIGHTS, weighted_sample_without_replacement,
+    draw_pause_button, draw_pause_menu, draw_weapon_info_panel,
+    TALENT_POOL, TALENT_WEIGHTS, sample_talent_options,
+    draw_wrapped_text, fit_text_1line, FONT_SIZE_MD, FONT_SIZE_SM, FONT_SIZE_LG,
 )
+from i18n import t, instruction_lines, talent_text, next_lang
+
+
+def talent_card_rects(count):
+    """Lays out `count` talent-select cards. On screens wide enough it's
+    the original single horizontal row, centered; on screens too narrow
+    for that (portrait phones), the cards stack vertically instead so
+    each one stays full-width and fully on-screen rather than overflowing
+    the sides."""
+    gap = 20
+    default_w, default_h = 200, 240
+    row_w = count * default_w + (count - 1) * gap
+
+    if SCREEN_WIDTH >= row_w + 40:
+        start_x = (SCREEN_WIDTH - row_w) // 2
+        by = min(280, max(20, SCREEN_HEIGHT - default_h - 40))
+        return [pygame.Rect(start_x + i * (default_w + gap), by, default_w, default_h) for i in range(count)]
+
+    card_w = min(default_w, SCREEN_WIDTH - 40)
+    card_h = min(default_h, max(140, (SCREEN_HEIGHT - 60 - (count - 1) * gap) // count))
+    bx = (SCREEN_WIDTH - card_w) // 2
+    total_h = count * card_h + (count - 1) * gap
+    start_y = max(20, (SCREEN_HEIGHT - total_h) // 2)
+    return [pygame.Rect(bx, start_y + i * (card_h + gap), card_w, card_h) for i in range(count)]
 
 
 class GameSession:
@@ -80,7 +106,7 @@ async def main():
     font_lg = pygame.font.Font(FONT_PATH, 26)
     font_xl = pygame.font.Font(FONT_PATH, 40)
 
-    hud = GameHUD(SCREEN_WIDTH, SCREEN_HEIGHT)
+    hud = GameHUD(SCREEN_WIDTH, SCREEN_HEIGHT, FONT_PATH)
 
     session = GameSession()
 
@@ -90,18 +116,25 @@ async def main():
 
     joy_state = {"active": False, "offset": [0.0, 0.0]}
 
-    settings = {"master_volume": 0.7}
+    settings = {"master_volume": 0.7, "lang": "en"}
     pause_buttons = []
     pause_slider_rect = None
+    pause_lang_button_rect = None
     pause_button_rect = None
+    weapon_card_rect = None
+    weapon_info_close_rect = None
+    weapon_info_scroll = 0.0
+    weapon_info_max_scroll = 0.0
     dragging_volume = False
+    dragging_weapon_info = False
+    weapon_info_drag_last_y = 0
 
     final_stats_snapshot = {"wave": 1, "level": 1}
 
     def start_new_talent_choice():
         nonlocal talent_options, selected_talent_idx, game_state
         weights = [TALENT_WEIGHTS[t["id"]] for t in TALENT_POOL]
-        talent_options = weighted_sample_without_replacement(TALENT_POOL, weights, 3)
+        talent_options = sample_talent_options(TALENT_POOL, weights, 3)
         selected_talent_idx = 0
         game_state = "TALENT_SELECT"
 
@@ -110,14 +143,15 @@ async def main():
         chosen = talent_options[idx]
         stats = session.stats
         if chosen["id"] == "add_armor":
-            stats.equip_armor(random.randint(1, 4))
+            stats.try_add_shield_tier(random.randint(1, 4))
+        elif chosen["id"] == "armor_airdrop":
+            stats.apply_airdrop(random.randint(1, 4))
         elif chosen["id"] == "hp_up":
-            stats.max_hp += 25
-            stats.hp = min(stats.hp + 25, stats.max_hp)
+            stats.add_max_hp(25)
         elif chosen["id"] == "speed_up":
-            stats.move_speed *= 1.12
+            stats.move_speed *= 1.05
         elif chosen["id"] == "weapon_tier_up":
-            stats.weapon.upgrade_tier()
+            stats.weapon.upgrade_tier_or_boost_damage()
         elif chosen["id"] == "switch_weapon":
             stats.weapon.change_type_randomly()
 
@@ -127,18 +161,62 @@ async def main():
         else:
             game_state = "PLAYING"
 
+    def award_zombie_kill(z):
+        """Kills z and grants its rewards (exp / boss loot / talent
+        choices). Shared by direct bullet hits, explosion splash damage,
+        and burn ticks so the reward logic only lives in one place."""
+        stats = session.stats
+        is_boss_kill = getattr(z, "is_boss", False)
+        death_x, death_y = z.rect.centerx, z.rect.centery
+        z.kill()
+
+        if is_boss_kill:
+            stats.exp += 150 * (1.0 + stats.exp_gain_mult)
+            session.pending_talent_choices += 1
+            session.effect_flash_timer = EFFECT_FLASH_DURATION
+            spawn_boss_kill_particles(session.particles, death_x, death_y)
+        else:
+            stats.exp += 12.5 * (1.0 + stats.exp_gain_mult)
+
+        while stats.exp >= stats.exp_to_next_level:
+            stats.level += 1
+            stats.exp -= stats.exp_to_next_level
+            stats.exp_to_next_level = int(stats.exp_to_next_level * 1.2)
+            session.pending_talent_choices += 1
+
+    def trigger_explosion(b, origin_zombie):
+        """Grenade Launcher impact: splash damage to nearby zombies plus a
+        burn-over-time debuff on everything caught in the blast."""
+        ex, ey = origin_zombie.rect.centerx, origin_zombie.rect.centery
+        spawn_explosion_particles(session.particles, ex, ey)
+
+        for other in list(session.zombies):
+            if other is origin_zombie:
+                continue
+            d = math.hypot(other.rect.centerx - ex, other.rect.centery - ey)
+            if d <= b.explosion_radius:
+                other.hp -= b.explosion_damage
+                if session.stats.lifesteal_percent > 0:
+                    stats = session.stats
+                    stats.hp = min(stats.max_hp, stats.hp + b.explosion_damage * stats.lifesteal_percent)
+                if other.hp <= 0:
+                    award_zombie_kill(other)
+                elif hasattr(other, "apply_burn"):
+                    other.apply_burn(b.burn_dps, b.burn_duration)
+
+        if origin_zombie.hp > 0 and hasattr(origin_zombie, "apply_burn"):
+            origin_zombie.apply_burn(b.burn_dps, b.burn_duration)
+
     def handle_pointer_down(pos):
-        nonlocal game_state, session, dragging_volume
+        nonlocal game_state, session, dragging_volume, dragging_weapon_info, weapon_info_drag_last_y, weapon_info_scroll
         if game_state == "INSTRUCTION":
             game_state = "PLAYING"
         elif game_state == "GAME_OVER":
             session = GameSession()
             game_state = "INSTRUCTION"
         elif game_state == "TALENT_SELECT":
-            for idx in range(len(talent_options)):
-                bx = 180 + idx * 230
-                by = 280
-                if pygame.Rect(bx, by, 200, 240).collidepoint(pos):
+            for idx, rect in enumerate(talent_card_rects(len(talent_options))):
+                if rect.collidepoint(pos):
                     confirm_talent(idx)
                     break
         elif game_state == "PAUSED":
@@ -153,28 +231,46 @@ async def main():
                         session = GameSession()
                         game_state = "INSTRUCTION"
                     return
+            if pause_lang_button_rect and pause_lang_button_rect.collidepoint(pos):
+                settings["lang"] = next_lang(settings["lang"])
+                return
             if pause_slider_rect and pause_slider_rect.collidepoint(pos):
                 dragging_volume = True
                 ratio = (pos[0] - pause_slider_rect.x) / pause_slider_rect.width
                 settings["master_volume"] = max(0.0, min(1.0, ratio))
+        elif game_state == "WEAPON_INFO":
+            if weapon_info_close_rect and weapon_info_close_rect.collidepoint(pos):
+                game_state = "PLAYING"
+            else:
+                dragging_weapon_info = True
+                weapon_info_drag_last_y = pos[1]
         elif game_state == "PLAYING":
             if pause_button_rect and pause_button_rect.collidepoint(pos):
                 game_state = "PAUSED"
+            elif weapon_card_rect and weapon_card_rect.collidepoint(pos):
+                game_state = "WEAPON_INFO"
+                weapon_info_scroll = 0.0
             else:
                 joystick_handle_down(pos, joy_state)
 
     def handle_pointer_move(pos):
+        nonlocal weapon_info_scroll, weapon_info_drag_last_y
         if game_state == "PLAYING":
             joystick_handle_move(pos, joy_state)
         elif game_state == "PAUSED" and dragging_volume and pause_slider_rect:
             ratio = (pos[0] - pause_slider_rect.x) / pause_slider_rect.width
             settings["master_volume"] = max(0.0, min(1.0, ratio))
+        elif game_state == "WEAPON_INFO" and dragging_weapon_info:
+            dy = pos[1] - weapon_info_drag_last_y
+            weapon_info_scroll = max(0.0, min(weapon_info_max_scroll, weapon_info_scroll - dy))
+            weapon_info_drag_last_y = pos[1]
 
     def handle_pointer_up():
-        nonlocal dragging_volume
+        nonlocal dragging_volume, dragging_weapon_info
         if game_state == "PLAYING":
             joystick_handle_up(joy_state)
         dragging_volume = False
+        dragging_weapon_info = False
 
     running = True
     while running:
@@ -187,6 +283,13 @@ async def main():
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE and game_state in ("PLAYING", "PAUSED"):
                     game_state = "PAUSED" if game_state == "PLAYING" else "PLAYING"
+                elif event.key == pygame.K_ESCAPE and game_state == "WEAPON_INFO":
+                    game_state = "PLAYING"
+                elif event.key == pygame.K_c and game_state == "PLAYING":
+                    game_state = "WEAPON_INFO"
+                    weapon_info_scroll = 0.0
+                elif event.key == pygame.K_c and game_state == "WEAPON_INFO":
+                    game_state = "PLAYING"
 
                 elif game_state == "INSTRUCTION":
                     if event.key in (pygame.K_RETURN, pygame.K_SPACE):
@@ -217,6 +320,9 @@ async def main():
                 handle_pointer_move((event.x * SCREEN_WIDTH, event.y * SCREEN_HEIGHT))
             elif event.type == pygame.FINGERUP:
                 handle_pointer_up()
+            elif event.type == pygame.MOUSEWHEEL:
+                if game_state == "WEAPON_INFO":
+                    weapon_info_scroll = max(0.0, min(weapon_info_max_scroll, weapon_info_scroll - event.y * 40))
 
         if game_state == "PLAYING":
             stats = session.stats
@@ -280,6 +386,15 @@ async def main():
                 count = w.shot_count
                 spread = w.type_data["spread_angle"]
 
+                is_explosive = w.type_data.get("explosive", False)
+                if is_explosive:
+                    explosion_radius = w.type_data.get("explosion_radius", 0)
+                    explosion_damage = w.damage * w.type_data.get("explosion_damage_ratio", 1.0)
+                    burn_dps = w.damage * w.type_data.get("burn_dps_ratio", 0.0)
+                    burn_duration = w.type_data.get("burn_duration", 0.0)
+                else:
+                    explosion_radius, explosion_damage, burn_dps, burn_duration = 0, 0.0, 0.0, 0.0
+
                 if count == 1:
                     angles = [aim_angle]
                 else:
@@ -291,7 +406,10 @@ async def main():
                         player_pos[0], player_pos[1], ang,
                         w.damage, w.type_data["bullet_speed"],
                         w.pierce, w.color, w.tier_data["lvl"],
-                        w.max_range
+                        w.max_range,
+                        explosive=is_explosive, explosion_radius=explosion_radius,
+                        explosion_damage=explosion_damage,
+                        burn_dps=burn_dps, burn_duration=burn_duration,
                     )
                     bullets.add(b)
                 session.shoot_cooldown = w.fire_rate
@@ -344,8 +462,21 @@ async def main():
                         zombies.add(Zombie(zx, zy, hp=20 + session.current_wave * 10, wave=session.current_wave))
 
             bullets.update(dt)
-            for z in zombies:
-                z.update(player_pos, obstacles, zombies)
+            for z in list(zombies):
+                if getattr(z, "is_boss", False):
+                    z.update(player_pos, obstacles, zombies, dt,
+                             on_player_hit=lambda dmg, boss=z: stats.take_damage(dmg, attacker=boss))
+                    if z.hp <= 0:
+                        award_zombie_kill(z)
+                else:
+                    z.update(player_pos, obstacles, zombies)
+
+            for z in list(zombies):
+                if getattr(z, "burn_timer", 0.0) > 0:
+                    z.hp -= z.burn_dps * dt
+                    z.burn_timer = max(0.0, z.burn_timer - dt)
+                    if z.hp <= 0:
+                        award_zombie_kill(z)
 
             update_particles(session.particles, dt)
             if session.effect_flash_timer > 0:
@@ -358,33 +489,25 @@ async def main():
                         b.hit_enemies.add(z)
                         z.hp -= b.damage
                         b.pierce -= 1
+                        if stats.lifesteal_percent > 0:
+                            stats.hp = min(stats.max_hp, stats.hp + b.damage * stats.lifesteal_percent)
+
+                        if getattr(b, "explosive", False):
+                            trigger_explosion(b, z)
+                            b.pierce = 0  # grenades explode on first impact, they don't pierce onward
+
                         if z.hp <= 0:
-                            is_boss_kill = getattr(z, "is_boss", False)
-                            death_x, death_y = z.rect.centerx, z.rect.centery
-                            z.kill()
-
-                            if is_boss_kill:
-                                stats.exp += 150
-                                stats.weapon.upgrade_tier()
-                                stats.weapon.upgrade_tier()
-                                session.effect_flash_timer = EFFECT_FLASH_DURATION
-                                spawn_boss_kill_particles(session.particles, death_x, death_y)
-                            else:
-                                stats.exp += 12.5
-
-                            while stats.exp >= stats.exp_to_next_level:
-                                stats.level += 1
-                                stats.exp -= stats.exp_to_next_level
-                                stats.exp_to_next_level = int(stats.exp_to_next_level * 1.2)
-                                session.pending_talent_choices += 1
-                        if b.pierce <= 0:
-                            b.kill()
-                            break
+                            award_zombie_kill(z)
+                    if b.pierce <= 0:
+                        b.kill()
+                        break
 
             player_rect = pygame.Rect(player_pos[0] - 16, player_pos[1] - 16, 32, 32)
-            for z in zombies:
+            for z in list(zombies):
                 if player_rect.colliderect(z.rect):
-                    stats.take_damage(z.attack)
+                    stats.take_damage(z.attack, attacker=z)
+                    if z.hp <= 0:
+                        award_zombie_kill(z)
 
             if session.pending_talent_choices > 0:
                 start_new_talent_choice()
@@ -406,7 +529,7 @@ async def main():
         cam_x = player_pos[0] - SCREEN_WIDTH // 2
         cam_y = player_pos[1] - SCREEN_HEIGHT // 2
 
-        if game_state in ("PLAYING", "TALENT_SELECT", "GAME_OVER", "PAUSED"):
+        if game_state in ("PLAYING", "TALENT_SELECT", "GAME_OVER", "PAUSED", "WEAPON_INFO"):
             draw_scrolling_grid(screen, cam_x, cam_y, theme)
 
             render_objects = []
@@ -437,23 +560,33 @@ async def main():
                     zx, zy = z.rect.x - cam_x, z.rect.y - cam_y
                     shadow_w = z.rect.width
                     pygame.draw.ellipse(screen, (20, 30, 20), (zx, zy + z.rect.height - 8, shadow_w, 10))
+                    if getattr(z, "burn_timer", 0.0) > 0:
+                        glow_r = 34 if getattr(z, "is_boss", False) else 20
+                        glow_surf = pygame.Surface((glow_r * 2, glow_r * 2), pygame.SRCALPHA)
+                        pygame.draw.circle(glow_surf, (255, 120, 0, 90), (glow_r, glow_r), glow_r)
+                        screen.blit(glow_surf, (z.rect.centerx - cam_x - glow_r, z.rect.centery - cam_y - glow_r))
                     screen.blit(z.image, (zx, zy))
                     z_hp_ratio = z.hp / z.max_hp if z.max_hp > 0 else 0
                     bar_w = 46 if getattr(z, "is_boss", False) else 28
                     draw_floating_bar(screen, z.rect.centerx - cam_x, zy - 10, bar_w, 5, z_hp_ratio, (220, 40, 40))
+                    if getattr(z, "enraged", False):
+                        enrage_surf = font_sm.render(t(settings["lang"], "boss_enraged"), True, (255, 90, 0))
+                        screen.blit(enrage_surf, (z.rect.centerx - cam_x - enrage_surf.get_width() // 2, zy - 26))
                 elif obj[1] == "obstacle":
                     draw_obstacle(screen, obj[2], cam_x, cam_y, theme)
 
+            boss_for_hud = next((z for z in zombies if getattr(z, "is_boss", False)), None)
+            draw_boss_meteors(screen, boss_for_hud, cam_x, cam_y)
+
             draw_particles(screen, session.particles, cam_x, cam_y)
 
-            boss_for_hud = next((z for z in zombies if getattr(z, "is_boss", False)), None)
-            hud.draw(screen, stats, session.current_wave, session.wave_timer / 30.0,
-                     theme["name"], boss_for_hud, font_sm, font_md, font_lg)
+            weapon_card_rect = hud.draw(screen, stats, session.current_wave, session.wave_timer / 30.0,
+                     theme["name"], boss_for_hud, font_sm, font_md, font_lg, settings["lang"])
 
             if session.boss_warning_timer > 0:
                 blink = math.sin(pygame.time.get_ticks() * 0.02) > 0
                 if blink:
-                    warn_surf = font_xl.render("⚠ BOSS INCOMING ⚠", True, (255, 50, 50))
+                    warn_surf = font_xl.render(t(settings["lang"], "boss_incoming"), True, (255, 50, 50))
                     screen.blit(warn_surf, ((SCREEN_WIDTH - warn_surf.get_width()) // 2, 220))
 
             draw_effect_flash(screen, session.effect_flash_timer, SCREEN_WIDTH, SCREEN_HEIGHT)
@@ -463,48 +596,66 @@ async def main():
                 pause_button_rect = draw_pause_button(screen, SCREEN_WIDTH)
 
         if game_state == "PAUSED":
-            pause_buttons, pause_slider_rect = draw_pause_menu(
-                screen, SCREEN_WIDTH, SCREEN_HEIGHT, font_lg, font_md, font_sm, settings
+            pause_buttons, pause_slider_rect, pause_lang_button_rect = draw_pause_menu(
+                screen, SCREEN_WIDTH, SCREEN_HEIGHT, font_lg, font_md, font_sm, settings, FONT_PATH
             )
+
+        if game_state == "WEAPON_INFO":
+            weapon_info_close_rect, weapon_info_max_scroll = draw_weapon_info_panel(
+                screen, SCREEN_WIDTH, SCREEN_HEIGHT, font_lg, font_md, font_sm, stats, settings["lang"], FONT_PATH,
+                scroll_offset=weapon_info_scroll,
+            )
+            weapon_info_scroll = max(0.0, min(weapon_info_scroll, weapon_info_max_scroll))
 
         if game_state == "TALENT_SELECT":
             overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
             overlay.fill((0, 0, 0, 180))
             screen.blit(overlay, (0, 0))
 
-            title = font_lg.render("🎉 Level Up! Choose a Talent", True, (255, 215, 0))
+            title = font_lg.render(t(settings["lang"], "level_up"), True, (255, 215, 0))
             screen.blit(title, ((SCREEN_WIDTH - title.get_width()) // 2, 150))
 
             if session.pending_talent_choices > 1:
-                queue_txt = font_sm.render(f"({session.pending_talent_choices - 1} more choices pending)", True, (255, 255, 255))
+                queue_txt = font_sm.render(
+                    t(settings["lang"], "more_pending", n=session.pending_talent_choices - 1),
+                    True, (255, 255, 255)
+                )
                 screen.blit(queue_txt, ((SCREEN_WIDTH - queue_txt.get_width()) // 2, 195))
 
+            card_rects = talent_card_rects(len(talent_options))
             for idx, opt in enumerate(talent_options):
                 is_sel = (idx == selected_talent_idx)
-                bx = 180 + idx * 230
-                by = 280
-                pygame.draw.rect(screen, (60, 65, 85) if is_sel else (35, 38, 50), (bx, by, 200, 240), border_radius=10)
-                pygame.draw.rect(screen, (255, 215, 0) if is_sel else (80, 80, 80), (bx, by, 200, 240), width=3 if is_sel else 1, border_radius=10)
+                bx, by, card_w, card_h = card_rects[idx]
+                pygame.draw.rect(screen, (60, 65, 85) if is_sel else (35, 38, 50), (bx, by, card_w, card_h), border_radius=10)
+                pygame.draw.rect(screen, (255, 215, 0) if is_sel else (80, 80, 80), (bx, by, card_w, card_h), width=3 if is_sel else 1, border_radius=10)
 
-                screen.blit(font_md.render(opt["name"], True, (255, 255, 255)), (bx + 15, by + 20))
-                desc_surf = font_sm.render(opt["desc"], True, (200, 200, 200))
-                screen.blit(desc_surf, (bx + 15, by + 70))
+                inner_w = card_w - 30  # 15px padding on each side
+
+                opt_name = talent_text(settings["lang"], opt["id"], "name")
+                name_font, name_text = fit_text_1line(FONT_PATH, opt_name, inner_w, FONT_SIZE_MD)
+                screen.blit(name_font.render(name_text, True, (255, 255, 255)), (bx + 15, by + 20))
+
+                opt_desc = talent_text(settings["lang"], opt["id"], "desc")
+                desc_area_h = card_h - 70 - 15  # from the desc's top down to the card's bottom padding
+                max_desc_lines = max(1, desc_area_h // (font_sm.get_height() + 4))
+                draw_wrapped_text(screen, font_sm, opt_desc, (200, 200, 200), bx + 15, by + 70, inner_w,
+                                   line_gap=4, max_lines=max_desc_lines)
 
         if game_state == "GAME_OVER":
             overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
             overlay.fill((10, 0, 0, 210))
             screen.blit(overlay, (0, 0))
 
-            title = font_lg.render("💀 GAME OVER", True, (255, 60, 60))
+            title = font_lg.render(t(settings["lang"], "game_over"), True, (255, 60, 60))
             screen.blit(title, ((SCREEN_WIDTH - title.get_width()) // 2, 260))
 
-            stat_line1 = font_md.render(f"Survived to Wave {final_stats_snapshot['wave']}", True, (255, 255, 255))
+            stat_line1 = font_md.render(t(settings["lang"], "survived", wave=final_stats_snapshot['wave']), True, (255, 255, 255))
             screen.blit(stat_line1, ((SCREEN_WIDTH - stat_line1.get_width()) // 2, 330))
 
-            stat_line2 = font_md.render(f"Character Level Lv.{final_stats_snapshot['level']}", True, (255, 255, 255))
+            stat_line2 = font_md.render(t(settings["lang"], "char_level", level=final_stats_snapshot['level']), True, (255, 255, 255))
             screen.blit(stat_line2, ((SCREEN_WIDTH - stat_line2.get_width()) // 2, 365))
 
-            restart_txt = font_md.render("[ Press ENTER / SPACE or Tap Screen to Restart ]", True, (0, 255, 200))
+            restart_txt = font_md.render(t(settings["lang"], "restart_prompt"), True, (0, 255, 200))
             screen.blit(restart_txt, ((SCREEN_WIDTH - restart_txt.get_width()) // 2, 430))
 
         if game_state == "INSTRUCTION":
@@ -512,23 +663,36 @@ async def main():
             overlay.fill((15, 15, 25, 230))
             screen.blit(overlay, (0, 0))
 
-            pygame.draw.rect(screen, (35, 40, 55), (212, 184, 600, 400), border_radius=12)
-            pygame.draw.rect(screen, (255, 215, 0), (212, 184, 600, 400), width=3, border_radius=12)
+            panel_w = min(600, SCREEN_WIDTH - 40)
+            panel_h = min(400, SCREEN_HEIGHT - 40)
+            panel_x = (SCREEN_WIDTH - panel_w) // 2
+            panel_y = (SCREEN_HEIGHT - panel_h) // 2
+            pygame.draw.rect(screen, (35, 40, 55), (panel_x, panel_y, panel_w, panel_h), border_radius=12)
+            pygame.draw.rect(screen, (255, 215, 0), (panel_x, panel_y, panel_w, panel_h), width=3, border_radius=12)
 
-            screen.blit(font_lg.render("🎮 2.5D Block Man vs Zombies - Instructions", True, (255, 215, 0)), (260, 215))
+            title_font, title_text = fit_text_1line(FONT_PATH, t(settings["lang"], "instructions_title"), panel_w - 96, FONT_SIZE_LG)
+            screen.blit(title_font.render(title_text, True, (255, 215, 0)), (panel_x + 48, panel_y + 31))
 
-            lines = [
-                "WASD keys / bottom-left virtual joystick: move and face direction",
-                "Auto-fire: weapon automatically aims and fires at the nearest enemy when off cooldown",
-                "A / D keys / on mobile tap the card directly: choose a talent upgrade",
-                "Weapon tiers: Fine \u2794 Epic \u2794 Sacred \u2794 Royal \u2794 Imperial \u2794 Divine",
-                "Every 5 waves the map theme changes and a BOSS appears"
-            ]
-            for i, line in enumerate(lines):
-                screen.blit(font_md.render(f"• {line}", True, (220, 220, 220)), (250, 280 + i * 38))
+            lines = instruction_lines(settings["lang"])
+            text_x = panel_x + 38
+            avail_w = panel_x + panel_w - text_x - 20  # panel's right edge minus the text's x minus right padding
+            cursor_y = panel_y + 96
+            for line in lines:
+                used_h = draw_wrapped_text(screen, font_md, f"• {line}", (220, 220, 220), text_x, cursor_y, avail_w,
+                                            line_gap=4, max_lines=2)
+                cursor_y += used_h + 8
 
-            start_txt = font_md.render("[ Press ENTER / SPACE or Tap Screen to Start ]", True, (0, 255, 200))
-            screen.blit(start_txt, ((SCREEN_WIDTH - start_txt.get_width()) // 2, 520))
+            # Drawn below the panel instead of over the last instruction
+            # line (they used to overlap), enlarged, and blinking so it
+            # reads clearly as the "press to continue" cue. It's part of
+            # the same INSTRUCTION-state block, so it disappears together
+            # with the panel the moment the game starts.
+            start_font, start_text = fit_text_1line(FONT_PATH, t(settings["lang"], "start_prompt"), SCREEN_WIDTH - 40, FONT_SIZE_LG)
+            start_surf = start_font.render(start_text, True, (0, 255, 200))
+            blink_alpha = int(160 + 95 * math.sin(pygame.time.get_ticks() / 220))
+            start_surf.set_alpha(max(60, blink_alpha))
+            start_y = min(panel_y + panel_h + 26, SCREEN_HEIGHT - start_surf.get_height() - 16)
+            screen.blit(start_surf, ((SCREEN_WIDTH - start_surf.get_width()) // 2, start_y))
 
         pygame.display.flip()
         await asyncio.sleep(0)
