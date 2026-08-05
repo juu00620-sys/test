@@ -9,7 +9,7 @@ from map import MAP_WIDTH, MAP_HEIGHT
 class Bullet(pygame.sprite.Sprite):
     def __init__(self, x, y, angle_deg, damage, speed, pierce, color, tier_lvl, max_range,
                  explosive=False, explosion_radius=0, explosion_damage=0.0,
-                 burn_dps=0.0, burn_duration=0.0, bounces=0):
+                 burn_dps=0.0, burn_duration=0.0, bounces=0, weapon_lifesteal=0.0):
         super().__init__()
         radius = 4 + tier_lvl
         self.image = pygame.Surface((radius * 2, radius * 2), pygame.SRCALPHA)
@@ -27,6 +27,11 @@ class Bullet(pygame.sprite.Sprite):
         # continuing straight (see the collision loop in main.py).
         # Decremented per bounce.
         self.bounces = bounces
+        # Weapon-intrinsic lifesteal % (e.g. the Shotgun's), baked in at
+        # fire time so it stays correct even if the player switches
+        # weapons before this bullet lands. Combined with the player's
+        # talent-based lifesteal_percent stat at hit time - see main.py.
+        self.weapon_lifesteal = weapon_lifesteal
         self.hit_enemies = set()
         self.pos_x, self.pos_y = float(x), float(y)
 

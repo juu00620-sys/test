@@ -16,14 +16,18 @@ WEAPON_TYPES = {
     },
     "shotgun": {
         "name": "Shotgun",
-        "base_damage": 5,
-        "base_fire_rate": 0.6,
+        "base_damage": 10,
+        "base_fire_rate": 0.8,
         "base_shots": 5,
-        "base_pierce": 1,
-        "spread_angle": 25,
+        "base_pierce": 2,
+        "spread_angle": 5,
         "bullet_speed": 10,
         "max_range": 250,
         "explosive": False,
+        # Intrinsic lifesteal, unrelated to the "Armor Airdrop" talent's
+        # lifesteal_percent player stat - baseline 2%, +1% per tier level
+        # above Fine (see Weapon.lifesteal_percent below).
+        "base_lifesteal": 0.02,
     },
     "sniper": {
         "name": "Heavy Sniper",
@@ -103,6 +107,18 @@ class Weapon:
     @property
     def color(self):
         return self.tier_data["color"]
+
+    @property
+    def lifesteal_percent(self):
+        """Weapon-intrinsic lifesteal (currently only the Shotgun has any,
+        via its "base_lifesteal" entry in WEAPON_TYPES) - a flat % of each
+        hit's damage healed back, +1% per tier level above Fine. This is
+        separate from PlayerStats.lifesteal_percent (the "Armor Airdrop"
+        talent's stat); main.py adds the two together when a shot lands."""
+        base = self.type_data.get("base_lifesteal", 0.0)
+        if base <= 0:
+            return 0.0
+        return base + (self.tier_data["lvl"] - 1) * 0.01
 
     def is_max_tier(self):
         tiers = list(WEAPON_TIERS.keys())

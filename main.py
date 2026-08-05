@@ -22,7 +22,7 @@ from zombie import (
     Zombie, Boss, RangedZombie,
     BOSS_WARNING_DURATION, BOSS_HP_MULTIPLIER, BOSS_ATTACK_MULTIPLIER,
     RANGED_ZOMBIE_SPAWN_CHANCE, RANGED_ZOMBIE_PROJECTILE_SPEED, RANGED_ZOMBIE_PROJECTILE_MAX_RANGE,
-    draw_boss_meteors,
+    draw_boss_meteors, draw_boss_charge_warning,
 )
 from bullet import Bullet, ZombieBullet
 from effects import (
@@ -161,8 +161,18 @@ async def main():
 
     def start_new_talent_choice():
         nonlocal talent_options, selected_talent_idx, game_state
-        weights = [TALENT_WEIGHTS[t["id"]] for t in TALENT_POOL]
-        talent_options = sample_talent_options(TALENT_POOL, weights, 3)
+        # Some talents are gated to a specific weapon (e.g. "Ricochet" only
+        # rolls while wielding the Assault Rifle) via a "requires_weapon"
+        # key on the TALENT_POOL entry. Filter those out before weighting/
+        # sampling so a gated talent simply never comes up on other
+        # weapons - not shown, not pickable, not wasted as a roll.
+        current_weapon_id = session.stats.weapon.type_id
+        eligible_pool = [
+            t for t in TALENT_POOL
+            if t.get("requires_weapon") in (None, current_weapon_id)
+        ]
+        weights = [TALENT_WEIGHTS[t["id"]] for t in eligible_pool]
+        talent_options = sample_talent_options(eligible_pool, weights, 3)
         selected_talent_idx = 0
         game_state = "TALENT_SELECT"
 
@@ -241,12 +251,12 @@ async def main():
         if origin_zombie.hp > 0 and hasattr(origin_zombie, "apply_burn"):
             origin_zombie.apply_burn(b.burn_dps, b.burn_duration)
 
-    def spawn_zombie_bullet(x, y, angle, damage):
-        """Callback passed to RangedZombie.update() so it can fire without
-        needing direct access to the session's sprite groups."""
-        zb = ZombieBullet(x, y, angle, damage,
-                           speed=RANGED_ZOMBIE_PROJECTILE_SPEED,
-                           max_range=RANGED_ZOMBIE_PROJECTILE_MAX_RANGE)
+    def spawn_zombie_bullet(x, y, angle, damage, speed=RANGED_ZOMBIE_PROJECTILE_SPEED, max_range=RANGED_ZOMBIE_PROJECTILE_MAX_RANGE):
+        """Callback passed to RangedZombie.update()/Boss.update() so they
+        can fire without needing direct access to the session's sprite
+        groups. speed/max_range default to the RangedZombie's own values;
+        the Boss's triple-shot passes its own (see zombie.py)."""
+        zb = ZombieBullet(x, y, angle, damage, speed=speed, max_range=max_range)
         session.zombie_bullets.add(zb)
 
     def handle_pointer_down(pos):
@@ -432,6 +442,14 @@ async def main():
                 w = stats.weapon
                 count = w.shot_count + stats.bonus_shot_count
                 spread = w.type_data["spread_angle"]
+                # Ricochet only ever fires while wielding the Assault Rifle
+                # (see the "requires_weapon" gate on the talent itself in
+                # ui.py, which stops it from being *picked* on other
+                # weapons). This additionally makes sure any ricochet_count
+                # already banked from an earlier rifle run has no effect
+                # after switching weapons - it stays banked, and simply
+                # re-applies automatically if the player switches back.
+                effective_bounces = stats.ricochet_count if w.type_id == "rifle" else 0
 
                 is_explosive = w.type_data.get("explosive", False)
                 if is_explosive:
@@ -472,7 +490,8 @@ async def main():
                             "explosion_damage": explosion_damage,
                             "burn_dps": burn_dps,
                             "burn_duration": burn_duration,
-                            "bounces": stats.ricochet_count,
+                            "bounces": effective_bounces,
+                            "weapon_lifesteal": w.lifesteal_percent,
                         })
                     angles = []
                     spawn_offsets = []
@@ -486,7 +505,8 @@ async def main():
                         explosive=is_explosive, explosion_radius=explosion_radius,
                         explosion_damage=explosion_damage,
                         burn_dps=burn_dps, burn_duration=burn_duration,
-                        bounces=stats.ricochet_count,
+                        bounces=effective_bounces,
+                        weapon_lifesteal=w.lifesteal_percent,
                     )
                     bullets.add(b)
                 session.shoot_cooldown = w.fire_rate / (1.0 + stats.attack_speed_percent)
@@ -508,6 +528,7 @@ async def main():
                             explosion_damage=item["explosion_damage"],
                             burn_dps=item["burn_dps"], burn_duration=item["burn_duration"],
                             bounces=item["bounces"],
+                            weapon_lifesteal=item["weapon_lifesteal"],
                         )
                         bullets.add(b)
                     else:
@@ -591,10 +612,20 @@ async def main():
 
             bullets.update(dt)
             zombie_bullets.update(dt)
+            # Walls block bullets: any bullet (player's or a zombie's) that
+            # touches an obstacle this frame is stopped there instead of
+            # passing through it.
+            for b in list(bullets):
+                if any(b.rect.colliderect(ob) for ob in obstacles):
+                    b.kill()
+            for zb in list(zombie_bullets):
+                if any(zb.rect.colliderect(ob) for ob in obstacles):
+                    zb.kill()
             for z in list(zombies):
                 if getattr(z, "is_boss", False):
                     z.update(player_pos, obstacles, zombies, dt,
-                             on_player_hit=lambda dmg, boss=z: stats.take_damage(dmg, attacker=boss))
+                             on_player_hit=lambda dmg, boss=z: stats.take_damage(dmg, attacker=boss),
+                             on_shoot=spawn_zombie_bullet)
                     if z.hp <= 0:
                         award_zombie_kill(z)
                 elif getattr(z, "is_ranged", False):
@@ -620,8 +651,9 @@ async def main():
                         b.hit_enemies.add(z)
                         z.hp -= b.damage
                         b.pierce -= 1
-                        if stats.lifesteal_percent > 0:
-                            stats.hp = min(stats.max_hp, stats.hp + b.damage * stats.lifesteal_percent)
+                        if stats.lifesteal_percent > 0 or b.weapon_lifesteal > 0:
+                            total_lifesteal = stats.lifesteal_percent + b.weapon_lifesteal
+                            stats.hp = min(stats.max_hp, stats.hp + b.damage * total_lifesteal)
 
                         if getattr(b, "explosive", False):
                             trigger_explosion(b, z)
@@ -744,6 +776,7 @@ async def main():
 
             boss_for_hud = next((z for z in zombies if getattr(z, "is_boss", False)), None)
             draw_boss_meteors(world_surface, boss_for_hud, cam_x, cam_y)
+            draw_boss_charge_warning(world_surface, boss_for_hud, cam_x, cam_y)
 
             draw_particles(world_surface, session.particles, cam_x, cam_y)
 

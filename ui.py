@@ -27,7 +27,7 @@ TALENT_POOL = [
     {"id": "switch_weapon", "max_rank": 5},
     {"id": "atk_speed_up", "max_rank": 5},
     {"id": "bullet_count_up", "max_rank": 4},
-    {"id": "ricochet_up", "max_rank": 5},
+    {"id": "ricochet_up", "max_rank": 5, "requires_weapon": "rifle"},
 ]
 
 TALENT_WEIGHTS = {
@@ -394,7 +394,7 @@ def draw_weapon_info_panel(screen, screen_w, screen_h, font_lg, font_md, font_sm
     stat_row("weapon_info_shield", f"{int(stats.armor_hp)} / {int(stats.max_armor_hp)}")
     stat_row("weapon_info_shield_pct", f"+{stats.shield_percent * 100:.0f}%")
     stat_row("weapon_info_reflect", f"+{stats.reflect_percent * 100:.0f}%")
-    stat_row("weapon_info_lifesteal", f"+{stats.lifesteal_percent * 100:.0f}%")
+    stat_row("weapon_info_lifesteal", f"+{(stats.lifesteal_percent + weapon.lifesteal_percent) * 100:.0f}%")
     stat_row("weapon_info_exp_gain", f"+{stats.exp_gain_mult * 100:.0f}%")
 
     total_content_h = cursor_y

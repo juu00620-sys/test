@@ -93,6 +93,26 @@ METEOR_COOLDOWN_ENRAGED = 2.6
 METEOR_DAMAGE_MULTIPLIER = 3.0  # relative to boss.attack
 METEOR_TARGET_SPREAD = 90       # random offset around the player so it's not a guaranteed hit
 
+# --- Boss charge attack ---
+# Independent of enrage - available from the moment the boss spawns. If the
+# player is far enough away, the boss plants itself and winds up for
+# BOSS_CHARGE_WINDUP_TIME (telegraphed, dodgeable), then dashes in a
+# straight line at BOSS_CHARGE_SPEED_MULTIPLIER x its normal speed.
+BOSS_CHARGE_TRIGGER_DISTANCE = 300  # only considers charging if the player is at least this far away
+BOSS_CHARGE_WINDUP_TIME = 1.5       # telegraph duration before the dash fires (dodgeable)
+BOSS_CHARGE_DASH_DURATION = 0.5     # how long the dash itself lasts
+BOSS_CHARGE_SPEED_MULTIPLIER = 4.0
+BOSS_CHARGE_COOLDOWN = 4.0          # after a dash ends, before it can wind up again
+BOSS_CHARGE_TELEGRAPH_LENGTH = 260  # how far the warning wedge reaches at full charge
+BOSS_CHARGE_TELEGRAPH_WIDTH = 34
+
+# --- Boss triple-shot ---
+BOSS_BULLET_COOLDOWN = 5.0      # seconds between volleys
+BOSS_BULLET_COUNT = 3           # bullets per volley
+BOSS_BULLET_SPREAD_ANGLE = 5    # degrees between adjacent bullets in the volley
+BOSS_BULLET_SPEED = 6
+BOSS_BULLET_MAX_RANGE = 650
+
 
 class Zombie(pygame.sprite.Sprite):
     is_boss = False
@@ -267,6 +287,13 @@ class Boss(Zombie):
 
         self.meteor_cd = METEOR_COOLDOWN_NORMAL * 0.6  # first meteor arrives a bit sooner
         self.meteors = []  # each: {"x", "y", "timer", "state": "warning"/"impact"}
+        self.bullet_cd = BOSS_BULLET_COOLDOWN * 0.6     # first volley arrives a bit sooner
+
+        # Charge attack state machine: "idle" -> "winding_up" -> "charging"
+        # -> "cooldown" -> "idle". See _update_charge().
+        self.charge_state = "idle"
+        self.charge_timer = 0.0
+        self.charge_dir = (0.0, 0.0)
 
         # Burn-over-time status (set by explosive weapons); 0 means not burning.
         self.burn_timer = 0.0
@@ -315,7 +342,75 @@ class Boss(Zombie):
             elif m["state"] == "impact" and m["timer"] <= 0:
                 self.meteors.remove(m)
 
-    def _move(self, player_pos, obstacles):
+    def _update_bullets(self, dt, player_pos, on_shoot):
+        """Every BOSS_BULLET_COOLDOWN seconds, fires a BOSS_BULLET_COUNT-
+        bullet fan (BOSS_BULLET_SPREAD_ANGLE between adjacent bullets) at
+        the player, the same way RangedZombie fires - via the on_shoot
+        callback main.py passes in, so this class doesn't need direct
+        access to the session's sprite groups."""
+        self.bullet_cd -= dt
+        if self.bullet_cd <= 0 and on_shoot:
+            self.bullet_cd = BOSS_BULLET_COOLDOWN
+            dx = player_pos[0] - self.pos_x
+            dy = player_pos[1] - self.pos_y
+            base_angle = math.degrees(math.atan2(dy, dx))
+            start_a = base_angle - (BOSS_BULLET_SPREAD_ANGLE * (BOSS_BULLET_COUNT - 1) / 2)
+            for i in range(BOSS_BULLET_COUNT):
+                angle = start_a + i * BOSS_BULLET_SPREAD_ANGLE
+                on_shoot(self.pos_x, self.pos_y, angle, self.attack,
+                         speed=BOSS_BULLET_SPEED, max_range=BOSS_BULLET_MAX_RANGE)
+
+    def _update_charge(self, dt, player_pos):
+        """Advances the charge-attack state machine and returns an explicit
+        (move_x, move_y) velocity to force in _move() when the charge
+        overrides normal chase movement (frozen during windup, dashing in
+        a straight line during the charge itself), or None to let _move()
+        fall back to its usual chase-the-player behavior."""
+        if self.charge_state == "idle":
+            dist = math.hypot(player_pos[0] - self.pos_x, player_pos[1] - self.pos_y)
+            if dist > BOSS_CHARGE_TRIGGER_DISTANCE:
+                self.charge_state = "winding_up"
+                self.charge_timer = BOSS_CHARGE_WINDUP_TIME
+                dx, dy = player_pos[0] - self.pos_x, player_pos[1] - self.pos_y
+                self.charge_dir = (dx / dist, dy / dist) if dist > 0 else (1.0, 0.0)
+            return None
+
+        if self.charge_state == "winding_up":
+            self.charge_timer -= dt
+            if self.charge_timer <= 0:
+                self.charge_state = "charging"
+                self.charge_timer = BOSS_CHARGE_DASH_DURATION
+            return (0.0, 0.0)  # planted in place while winding up, per the telegraph
+
+        if self.charge_state == "charging":
+            self.charge_timer -= dt
+            if self.charge_timer <= 0:
+                self.charge_state = "cooldown"
+                self.charge_timer = BOSS_CHARGE_COOLDOWN
+            dash_speed = self.speed * BOSS_CHARGE_SPEED_MULTIPLIER
+            return (self.charge_dir[0] * dash_speed, self.charge_dir[1] * dash_speed)
+
+        if self.charge_state == "cooldown":
+            self.charge_timer -= dt
+            if self.charge_timer <= 0:
+                self.charge_state = "idle"
+            return None
+
+        return None
+
+    def _move(self, player_pos, obstacles, override_velocity=None):
+        if override_velocity is not None:
+            # Charge attack in progress: bypass the normal chase/avoidance
+            # steering entirely and just move in the given straight-line
+            # direction (still obstacle-blocked via move_with_collision).
+            move_x, move_y = override_velocity
+            move_rect = pygame.Rect(0, 0, BOSS_SIZE, BOSS_SIZE)
+            move_rect.center = (self.pos_x, self.pos_y)
+            move_rect = move_with_collision(move_rect, move_x, move_y, obstacles)
+            self.pos_x, self.pos_y = float(move_rect.centerx), float(move_rect.centery)
+            self.rect.center = (int(self.pos_x), int(self.pos_y))
+            return
+
         dx = player_pos[0] - self.pos_x
         dy = player_pos[1] - self.pos_y
         dist = math.hypot(dx, dy)
@@ -355,11 +450,49 @@ class Boss(Zombie):
         self.pos_x, self.pos_y = new_x, new_y
         self.rect.center = (int(self.pos_x), int(self.pos_y))
 
-    def update(self, player_pos, obstacles, neighbors, dt=0.0, on_player_hit=None):
+    def update(self, player_pos, obstacles, neighbors, dt=0.0, on_player_hit=None, on_shoot=None):
         self.age += dt
         self._try_enrage()
-        self._move(player_pos, obstacles)
+        charge_velocity = self._update_charge(dt, player_pos)
+        self._move(player_pos, obstacles, override_velocity=charge_velocity)
         self._update_meteors(dt, player_pos, on_player_hit)
+        self._update_bullets(dt, player_pos, on_shoot)
+
+
+def draw_boss_charge_warning(screen, boss, cam_x, cam_y):
+    """Draws a growing, pulsing warning wedge pointing in the boss's locked
+    charge direction while it's winding up (see Boss._update_charge()) -
+    same progress-driven telegraph language as draw_boss_meteors (outline
+    reads immediately, fill/alpha builds toward the release), just shaped
+    as a directional wedge instead of a point-target ring since a charge
+    threatens a line, not a spot."""
+    if boss is None or not getattr(boss, "is_boss", False):
+        return
+    if getattr(boss, "charge_state", "idle") != "winding_up":
+        return
+
+    progress = 1.0 - max(0.0, boss.charge_timer) / BOSS_CHARGE_WINDUP_TIME  # 0 -> 1 as the dash nears
+    dir_x, dir_y = boss.charge_dir
+    length = BOSS_CHARGE_TELEGRAPH_LENGTH * progress
+    half_w = BOSS_CHARGE_TELEGRAPH_WIDTH / 2
+
+    size = int(BOSS_CHARGE_TELEGRAPH_LENGTH * 2 + 20)
+    surf = pygame.Surface((size, size), pygame.SRCALPHA)
+    ox, oy = size / 2, size / 2
+
+    perp_x, perp_y = -dir_y, dir_x
+    tip = (ox + dir_x * length, oy + dir_y * length)
+    base_l = (ox + perp_x * half_w, oy + perp_y * half_w)
+    base_r = (ox - perp_x * half_w, oy - perp_y * half_w)
+
+    pulse = 0.65 + 0.35 * math.sin(boss.age * 16)  # fast pulse reads as "about to go off"
+    fill_alpha = int(70 + 110 * progress * pulse)
+    outline_alpha = int(150 + 90 * progress)
+
+    pygame.draw.polygon(surf, (255, 70, 20, fill_alpha), [(ox, oy), base_l, tip, base_r])
+    pygame.draw.polygon(surf, (255, 160, 0, outline_alpha), [(ox, oy), base_l, tip, base_r], width=3)
+
+    screen.blit(surf, (boss.pos_x - cam_x - ox, boss.pos_y - cam_y - oy))
 
 
 def draw_boss_meteors(screen, boss, cam_x, cam_y):

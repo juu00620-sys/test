@@ -69,7 +69,7 @@ STRINGS = {
             "switch_weapon": {"name": "Switch Weapon", "desc": "Randomly switch to another weapon type"},
             "atk_speed_up": {"name": "Rapid Fire", "desc": "Fire rate +1~5% (random), stacks"},
             "bullet_count_up": {"name": "Extra Round", "desc": "+1 bullet fired per shot"},
-            "ricochet_up": {"name": "Ricochet", "desc": "Bullets bounce to 1 more enemy immediately after each hit"},
+            "ricochet_up": {"name": "Ricochet", "desc": "Bullets bounce to 1 more enemy immediately after each hit (Assault Rifle only)"},
         },
     },
     "zh": {
@@ -127,7 +127,7 @@ STRINGS = {
             "switch_weapon": {"name": "切換武器", "desc": "隨機切換為另一種武器"},
             "atk_speed_up": {"name": "急速射擊", "desc": "攻速 +1~5%（隨機），可疊加"},
             "bullet_count_up": {"name": "追加彈藥", "desc": "每次射擊 +1 發子彈"},
-            "ricochet_up": {"name": "彈射", "desc": "子彈每次命中敵人後，會立即彈射攻擊 1 名額外敵人"},
+            "ricochet_up": {"name": "彈射", "desc": "子彈每次命中敵人後，會立即彈射攻擊 1 名額外敵人（限突擊步槍）"},
         },
     },
 }
