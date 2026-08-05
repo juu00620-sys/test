@@ -14,6 +14,19 @@ BOSS_ATTACK_MULTIPLIER = 2.0
 ZOMBIE_BASE_ATTACK = 0.3
 ZOMBIE_ATTACK_GROWTH_PER_WAVE = 0.02
 
+# --- Ranged zombie ("spitter") ---
+# Kites at a distance instead of closing to melee, and fires ZombieBullet
+# projectiles (bullet.py) at the player instead of touch-damage. Hits
+# harder per-instance than a melee zombie to compensate for spawning less
+# often (see RANGED_ZOMBIE_SPAWN_CHANCE, used by main.py's spawn logic).
+RANGED_ZOMBIE_SPAWN_CHANCE = 0.2       # fraction of normal spawns replaced by a ranged zombie
+RANGED_ZOMBIE_ATTACK_MULTIPLIER = 1.8  # applied on top of the normal per-wave attack formula
+RANGED_ZOMBIE_PREFERRED_RANGE = 260    # tries to hover at this distance from the player
+RANGED_ZOMBIE_RANGE_TOLERANCE = 40     # +/- band around preferred_range before it moves again
+RANGED_ZOMBIE_FIRE_COOLDOWN = 1.8      # seconds between shots
+RANGED_ZOMBIE_PROJECTILE_SPEED = 4
+RANGED_ZOMBIE_PROJECTILE_MAX_RANGE = 520
+
 # map.py's move_with_collision() already resolves X and Y separately, so it
 # already lets movers slide along a wall's face. The actual reason zombies
 # stall near obstacles is that they have no steering logic at all - if the
@@ -145,6 +158,81 @@ class Zombie(pygame.sprite.Sprite):
         self.rect.center = (int(self.pos_x), int(self.pos_y))
 
 
+class RangedZombie(Zombie):
+    """A "spitter" zombie: instead of closing to melee range it tries to
+    hold RANGED_ZOMBIE_PREFERRED_RANGE from the player, backing off if the
+    player gets too close, and periodically fires a ZombieBullet at them
+    (see bullet.py). Deals no touch damage of its own - all of its damage
+    comes from projectiles, which is why its .attack still gets set (used
+    as the per-shot damage) even though the melee collision check in
+    main.py will rarely land on it."""
+    is_boss = False
+    is_ranged = True
+
+    def __init__(self, x, y, hp=20, wave=1):
+        super().__init__(x, y, hp=hp, wave=wave)
+        # Distinct sickly-purple look so it reads as a different threat
+        # type at a glance, on top of its bullets using their own color.
+        self.image = pygame.Surface((32, 32), pygame.SRCALPHA)
+        pygame.draw.rect(self.image, (110, 40, 140), (0, 0, 32, 32), border_radius=4)
+        pygame.draw.rect(self.image, (225, 25, 140), (6, 6, 6, 6))
+        pygame.draw.rect(self.image, (225, 25, 140), (20, 6, 6, 6))
+        self.rect = self.image.get_rect(center=(x, y))
+
+        self.speed = 1.1  # slightly slower than a melee zombie - it kites rather than rushes
+        self.attack = (ZOMBIE_BASE_ATTACK + (wave - 1) * ZOMBIE_ATTACK_GROWTH_PER_WAVE) * RANGED_ZOMBIE_ATTACK_MULTIPLIER
+        # Stagger first shots so a wave of spitters doesn't all fire in sync.
+        self.fire_cooldown = RANGED_ZOMBIE_FIRE_COOLDOWN * random.uniform(0.4, 1.0)
+
+    def update(self, player_pos, obstacles, neighbors, dt=0.0, on_shoot=None):
+        dx = player_pos[0] - self.pos_x
+        dy = player_pos[1] - self.pos_y
+        dist = math.hypot(dx, dy)
+        dir_x, dir_y = (dx / dist, dy / dist) if dist > 0 else (0.0, 0.0)
+
+        # Kite: close in if too far outside the preferred range, back off
+        # if too close, hold still (aside from separation/avoidance) once
+        # within the tolerance band so it can actually land its shots.
+        if dist > RANGED_ZOMBIE_PREFERRED_RANGE + RANGED_ZOMBIE_RANGE_TOLERANCE:
+            want_x, want_y = dir_x, dir_y
+        elif dist < RANGED_ZOMBIE_PREFERRED_RANGE - RANGED_ZOMBIE_RANGE_TOLERANCE:
+            want_x, want_y = -dir_x, -dir_y
+        else:
+            want_x, want_y = 0.0, 0.0
+
+        sep_x, sep_y = 0.0, 0.0
+        for other in neighbors:
+            if other is self:
+                continue
+            ox = self.pos_x - other.pos_x
+            oy = self.pos_y - other.pos_y
+            d = math.hypot(ox, oy)
+            if 0 < d < 34:
+                sep_x += ox / d
+                sep_y += oy / d
+
+        avoid_x, avoid_y = _obstacle_avoid_vector(self.pos_x, self.pos_y, dir_x, dir_y, obstacles, size=32)
+
+        move_x = want_x + sep_x * 0.5 + avoid_x * OBSTACLE_AVOID_WEIGHT
+        move_y = want_y + sep_y * 0.5 + avoid_y * OBSTACLE_AVOID_WEIGHT
+        m = math.hypot(move_x, move_y)
+        if m > 0:
+            move_x = move_x / m * self.speed
+            move_y = move_y / m * self.speed
+
+        move_rect = pygame.Rect(0, 0, 32, 32)
+        move_rect.center = (self.pos_x, self.pos_y)
+        move_rect = move_with_collision(move_rect, move_x, move_y, obstacles)
+        self.pos_x, self.pos_y = float(move_rect.centerx), float(move_rect.centery)
+        self.rect.center = (int(self.pos_x), int(self.pos_y))
+
+        self.fire_cooldown -= dt
+        if self.fire_cooldown <= 0 and dist > 0 and on_shoot:
+            self.fire_cooldown = RANGED_ZOMBIE_FIRE_COOLDOWN
+            angle = math.degrees(math.atan2(dy, dx))
+            on_shoot(self.pos_x, self.pos_y, angle, self.attack)
+
+
 class Boss(Zombie):
     is_boss = True
 
@@ -184,14 +272,26 @@ class Boss(Zombie):
         self.burn_timer = 0.0
         self.burn_dps = 0.0
 
+    def _do_enrage(self):
+        self.enraged = True
+        self.speed = self.base_speed * ENRAGE_SPEED_MULTIPLIER
+        self.attack = self.base_attack * ENRAGE_ATTACK_MULTIPLIER
+        self.image = self.image_enraged
+
     def _try_enrage(self):
         if self.enraged:
             return
         if self.hp <= self.max_hp * ENRAGE_HP_RATIO or self.age >= ENRAGE_TIME_THRESHOLD:
-            self.enraged = True
-            self.speed = self.base_speed * ENRAGE_SPEED_MULTIPLIER
-            self.attack = self.base_attack * ENRAGE_ATTACK_MULTIPLIER
-            self.image = self.image_enraged
+            self._do_enrage()
+
+    def force_enrage(self):
+        """Explicitly triggers enrage regardless of the normal HP/age
+        thresholds - used when the boss-wave countdown runs out, so the
+        boss visibly snaps into its aggressive mode right as the timer
+        the player was watching hits zero. No-op if already enraged."""
+        if self.enraged:
+            return
+        self._do_enrage()
 
     def _update_meteors(self, dt, player_pos, on_player_hit):
         self.meteor_cd -= dt

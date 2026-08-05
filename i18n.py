@@ -67,6 +67,9 @@ STRINGS = {
             "speed_up": {"name": "Light Footwork", "desc": "Move speed +5%"},
             "weapon_tier_up": {"name": "Weapon Breakthrough", "desc": "Upgrade current weapon by one tier! (Boosts damage instead if already max tier)"},
             "switch_weapon": {"name": "Switch Weapon", "desc": "Randomly switch to another weapon type"},
+            "atk_speed_up": {"name": "Rapid Fire", "desc": "Fire rate +1~5% (random), stacks"},
+            "bullet_count_up": {"name": "Extra Round", "desc": "+1 bullet fired per shot"},
+            "ricochet_up": {"name": "Ricochet", "desc": "Bullets bounce to 1 more enemy immediately after each hit"},
         },
     },
     "zh": {
@@ -122,6 +125,9 @@ STRINGS = {
             "speed_up": {"name": "輕盈步伐", "desc": "移動速度 +5%"},
             "weapon_tier_up": {"name": "武器突破", "desc": "將當前武器升級一階！（若已達最高階則提升傷害）"},
             "switch_weapon": {"name": "切換武器", "desc": "隨機切換為另一種武器"},
+            "atk_speed_up": {"name": "急速射擊", "desc": "攻速 +1~5%（隨機），可疊加"},
+            "bullet_count_up": {"name": "追加彈藥", "desc": "每次射擊 +1 發子彈"},
+            "ricochet_up": {"name": "彈射", "desc": "子彈每次命中敵人後，會立即彈射攻擊 1 名額外敵人"},
         },
     },
 }

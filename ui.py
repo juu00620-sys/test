@@ -25,6 +25,9 @@ TALENT_POOL = [
     {"id": "speed_up", "max_rank": 3},
     {"id": "weapon_tier_up", "max_rank": 5},
     {"id": "switch_weapon", "max_rank": 5},
+    {"id": "atk_speed_up", "max_rank": 5},
+    {"id": "bullet_count_up", "max_rank": 4},
+    {"id": "ricochet_up", "max_rank": 5},
 ]
 
 TALENT_WEIGHTS = {
@@ -34,6 +37,9 @@ TALENT_WEIGHTS = {
     "speed_up": 1.0,
     "weapon_tier_up": 0.35,
     "switch_weapon": 1.0,
+    "atk_speed_up": 1.0,
+    "bullet_count_up": 0.4,
+    "ricochet_up": 0.5,
 }
 
 # Talent ids inside the same set are never offered together in one 3-choice

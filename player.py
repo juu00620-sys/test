@@ -74,6 +74,21 @@ class PlayerStats:
         self.lifesteal_percent = 0.0   # % of damage dealt to zombies healed back to the player
         self.exp_gain_mult = 0.0       # extra exp gained, e.g. 0.02 = +2% exp
 
+        # "+% Attack Speed" talent (id "atk_speed_up"): each pick rolls a
+        # random 1-5% and adds it here permanently (stacks additively).
+        # Applied by dividing the weapon's fire_rate (cooldown seconds) by
+        # (1 + attack_speed_percent) at the point the shot is fired.
+        self.attack_speed_percent = 0.0
+        # "Bullet Count +1" talent (id "bullet_count_up"): each pick adds a
+        # permanent +1 bullet fired per shot, on top of weapon.shot_count.
+        self.bonus_shot_count = 0
+        # "Ricochet +1" talent (id "ricochet_up"): each pick grants every
+        # fired bullet +1 permanent bounce charge - immediately after any
+        # hit (regardless of remaining pierce), the bullet retargets the
+        # nearest un-hit zombie instead of continuing straight, consuming
+        # one charge per bounce.
+        self.ricochet_count = 0
+
         self.weapon = Weapon("rifle", "Fine")
 
     def _recompute_shield(self):

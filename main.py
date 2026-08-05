@@ -9,6 +9,7 @@ import pygame
 from map import (
     SCREEN_WIDTH, SCREEN_HEIGHT, MAP_WIDTH, MAP_HEIGHT,
     THEME_WAVES, MAP_THEMES,
+    CAMERA_ZOOM, WORLD_VIEW_WIDTH, WORLD_VIEW_HEIGHT,
     build_obstacles, move_with_collision,
     draw_scrolling_grid, draw_obstacle,
 )
@@ -18,11 +19,12 @@ from player import (
     joystick_handle_down, joystick_handle_move, joystick_handle_up, joystick_vector,
 )
 from zombie import (
-    Zombie, Boss,
+    Zombie, Boss, RangedZombie,
     BOSS_WARNING_DURATION, BOSS_HP_MULTIPLIER, BOSS_ATTACK_MULTIPLIER,
+    RANGED_ZOMBIE_SPAWN_CHANCE, RANGED_ZOMBIE_PROJECTILE_SPEED, RANGED_ZOMBIE_PROJECTILE_MAX_RANGE,
     draw_boss_meteors,
 )
-from bullet import Bullet
+from bullet import Bullet, ZombieBullet
 from effects import (
     EFFECT_FLASH_DURATION,
     spawn_boss_kill_particles, spawn_explosion_particles, update_particles, draw_particles, draw_effect_flash,
@@ -66,6 +68,7 @@ class GameSession:
         self.stats = PlayerStats()
         self.bullets = pygame.sprite.Group()
         self.zombies = pygame.sprite.Group()
+        self.zombie_bullets = pygame.sprite.Group()
 
         self.theme_index = 0
         self.obstacles = build_obstacles(self.theme_index)
@@ -79,6 +82,13 @@ class GameSession:
         self.zombie_spawn_timer = 0.0
 
         self.pending_talent_choices = 0
+
+        # Queued shots for weapons firing as a rapid burst (zero-spread
+        # weapons with more than 1 shot per volley, e.g. sniper + "Extra
+        # Round") - each entry fires a short delay after the previous one
+        # instead of all bullets spawning simultaneously. See the shooting
+        # block and burst-queue processing in main().
+        self.burst_queue = []
 
         self.boss_wave_active = False
         self.boss_spawned = False
@@ -107,6 +117,15 @@ async def main():
     font_xl = pygame.font.Font(FONT_PATH, 40)
 
     hud = GameHUD(SCREEN_WIDTH, SCREEN_HEIGHT, FONT_PATH)
+
+    # World content (grid/obstacles/zombies/player/bullets/particles) is
+    # drawn onto this surface at CAMERA_ZOOM's virtual resolution, then
+    # scaled to fit the real screen once per frame (see the render block
+    # below). On desktop/landscape CAMERA_ZOOM is 1.0 so this is exactly
+    # SCREEN_WIDTH x SCREEN_HEIGHT and the scale is a no-op. HUD/menus are
+    # drawn directly onto `screen` afterwards so they stay crisp at native
+    # resolution regardless of zoom.
+    world_surface = pygame.Surface((WORLD_VIEW_WIDTH, WORLD_VIEW_HEIGHT))
 
     session = GameSession()
 
@@ -163,6 +182,12 @@ async def main():
             stats.weapon.upgrade_tier_or_boost_damage()
         elif chosen["id"] == "switch_weapon":
             stats.weapon.change_type_randomly()
+        elif chosen["id"] == "atk_speed_up":
+            stats.attack_speed_percent += random.uniform(0.01, 0.05)
+        elif chosen["id"] == "bullet_count_up":
+            stats.bonus_shot_count += 1
+        elif chosen["id"] == "ricochet_up":
+            stats.ricochet_count += 1
 
         session.pending_talent_choices = max(0, session.pending_talent_choices - 1)
         if session.pending_talent_choices > 0:
@@ -215,6 +240,14 @@ async def main():
 
         if origin_zombie.hp > 0 and hasattr(origin_zombie, "apply_burn"):
             origin_zombie.apply_burn(b.burn_dps, b.burn_duration)
+
+    def spawn_zombie_bullet(x, y, angle, damage):
+        """Callback passed to RangedZombie.update() so it can fire without
+        needing direct access to the session's sprite groups."""
+        zb = ZombieBullet(x, y, angle, damage,
+                           speed=RANGED_ZOMBIE_PROJECTILE_SPEED,
+                           max_range=RANGED_ZOMBIE_PROJECTILE_MAX_RANGE)
+        session.zombie_bullets.add(zb)
 
     def handle_pointer_down(pos):
         nonlocal game_state, session, dragging_volume, dragging_weapon_info, weapon_info_drag_last_y, weapon_info_scroll
@@ -341,6 +374,7 @@ async def main():
             stats = session.stats
             bullets = session.bullets
             zombies = session.zombies
+            zombie_bullets = session.zombie_bullets
             obstacles = session.obstacles
             player_pos = session.player_pos
 
@@ -396,7 +430,7 @@ async def main():
                     aim_angle = session.player_angle
 
                 w = stats.weapon
-                count = w.shot_count
+                count = w.shot_count + stats.bonus_shot_count
                 spread = w.type_data["spread_angle"]
 
                 is_explosive = w.type_data.get("explosive", False)
@@ -410,38 +444,105 @@ async def main():
 
                 if count == 1:
                     angles = [aim_angle]
-                else:
+                    spawn_offsets = [(0.0, 0.0)]
+                elif spread > 0:
                     start_a = aim_angle - (spread * (count - 1) / 2)
                     angles = [start_a + i * spread for i in range(count)]
+                    spawn_offsets = [(0.0, 0.0)] * count
+                else:
+                    # Zero-spread weapons (sniper, grenade launcher) fire
+                    # perfectly straight, so extra bullets from "Extra
+                    # Round" would otherwise all share the same angle and
+                    # spawn point. Fire them as a rapid burst instead - one
+                    # shot right after another - so each extra bullet reads
+                    # as its own distinct shot.
+                    BURST_INTERVAL = 0.07
+                    for i in range(count):
+                        session.burst_queue.append({
+                            "delay": i * BURST_INTERVAL,
+                            "angle": aim_angle,
+                            "damage": w.damage,
+                            "speed": w.type_data["bullet_speed"],
+                            "pierce": w.pierce,
+                            "color": w.color,
+                            "tier_lvl": w.tier_data["lvl"],
+                            "max_range": w.max_range,
+                            "explosive": is_explosive,
+                            "explosion_radius": explosion_radius,
+                            "explosion_damage": explosion_damage,
+                            "burn_dps": burn_dps,
+                            "burn_duration": burn_duration,
+                            "bounces": stats.ricochet_count,
+                        })
+                    angles = []
+                    spawn_offsets = []
 
-                for ang in angles:
+                for ang, (ox, oy) in zip(angles, spawn_offsets):
                     b = Bullet(
-                        player_pos[0], player_pos[1], ang,
+                        player_pos[0] + ox, player_pos[1] + oy, ang,
                         w.damage, w.type_data["bullet_speed"],
                         w.pierce, w.color, w.tier_data["lvl"],
                         w.max_range,
                         explosive=is_explosive, explosion_radius=explosion_radius,
                         explosion_damage=explosion_damage,
                         burn_dps=burn_dps, burn_duration=burn_duration,
+                        bounces=stats.ricochet_count,
                     )
                     bullets.add(b)
-                session.shoot_cooldown = w.fire_rate
+                session.shoot_cooldown = w.fire_rate / (1.0 + stats.attack_speed_percent)
 
-            session.wave_timer -= dt
-            if session.wave_timer <= 0:
+            # Fire any pending burst shots whose delay has elapsed (see
+            # the zero-spread branch above). Runs every frame regardless
+            # of shoot_cooldown so a burst keeps unfolding between volleys.
+            if session.burst_queue:
+                still_pending = []
+                for item in session.burst_queue:
+                    item["delay"] -= dt
+                    if item["delay"] <= 0:
+                        b = Bullet(
+                            player_pos[0], player_pos[1], item["angle"],
+                            item["damage"], item["speed"],
+                            item["pierce"], item["color"], item["tier_lvl"],
+                            item["max_range"],
+                            explosive=item["explosive"], explosion_radius=item["explosion_radius"],
+                            explosion_damage=item["explosion_damage"],
+                            burn_dps=item["burn_dps"], burn_duration=item["burn_duration"],
+                            bounces=item["bounces"],
+                        )
+                        bullets.add(b)
+                    else:
+                        still_pending.append(item)
+                session.burst_queue = still_pending
+
+            session.wave_timer = max(0.0, session.wave_timer - dt)
+
+            if not session.boss_wave_active and session.wave_timer <= 0:
                 session.current_wave += 1
-                session.wave_timer = 30.0
+                is_boss_wave = session.current_wave % 5 == 0
+                session.wave_timer = 60.0 if is_boss_wave else 30.0
 
-                new_theme = ((session.current_wave - 1) // THEME_WAVES) % len(MAP_THEMES)
-                if new_theme != session.theme_index:
-                    session.theme_index = new_theme
-                    session.obstacles = build_obstacles(new_theme)
-                    obstacles = session.obstacles
-
-                if session.current_wave % 5 == 0:
+                if is_boss_wave:
                     session.boss_wave_active = True
                     session.boss_spawned = False
                     session.boss_warning_timer = BOSS_WARNING_DURATION
+                else:
+                    # A boss wave's map change now happens once its boss is
+                    # actually killed (see below), not when this timer runs
+                    # out - only non-boss wave transitions change it here.
+                    new_theme = ((session.current_wave - 1) // THEME_WAVES) % len(MAP_THEMES)
+                    if new_theme != session.theme_index:
+                        session.theme_index = new_theme
+                        session.obstacles = build_obstacles(new_theme)
+                        obstacles = session.obstacles
+
+            if session.boss_wave_active and session.wave_timer <= 0:
+                # Countdown ran out without the boss dying - force it into
+                # enraged mode right as the player's timer hits zero,
+                # instead of ending the wave (which now only happens once
+                # the boss is actually killed).
+                boss_in_play = next((z for z in zombies if getattr(z, "is_boss", False)), None)
+                if boss_in_play is not None:
+                    boss_in_play.force_enrage()
 
             if session.boss_warning_timer > 0:
                 session.boss_warning_timer = max(0.0, session.boss_warning_timer - dt)
@@ -459,7 +560,17 @@ async def main():
                 boss_in_play = next((z for z in zombies if getattr(z, "is_boss", False)), None)
 
             if session.boss_wave_active and session.boss_spawned and boss_in_play is None:
+                # The boss just died: NOW advance to the next wave and
+                # change the map, instead of doing it off the timer.
                 session.boss_wave_active = False
+                session.current_wave += 1
+                session.wave_timer = 30.0
+
+                new_theme = ((session.current_wave - 1) // THEME_WAVES) % len(MAP_THEMES)
+                if new_theme != session.theme_index:
+                    session.theme_index = new_theme
+                    session.obstacles = build_obstacles(new_theme)
+                    obstacles = session.obstacles
 
             if not session.boss_wave_active or (session.boss_spawned and boss_in_play is None):
                 session.zombie_spawn_timer -= dt
@@ -472,15 +583,22 @@ async def main():
                     spawn_rect = pygame.Rect(0, 0, 32, 32)
                     spawn_rect.center = (zx, zy)
                     if not any(spawn_rect.colliderect(ob) for ob in obstacles):
-                        zombies.add(Zombie(zx, zy, hp=20 + session.current_wave * 10, wave=session.current_wave))
+                        z_hp = 20 + session.current_wave * 10
+                        if random.random() < RANGED_ZOMBIE_SPAWN_CHANCE:
+                            zombies.add(RangedZombie(zx, zy, hp=z_hp, wave=session.current_wave))
+                        else:
+                            zombies.add(Zombie(zx, zy, hp=z_hp, wave=session.current_wave))
 
             bullets.update(dt)
+            zombie_bullets.update(dt)
             for z in list(zombies):
                 if getattr(z, "is_boss", False):
                     z.update(player_pos, obstacles, zombies, dt,
                              on_player_hit=lambda dmg, boss=z: stats.take_damage(dmg, attacker=boss))
                     if z.hp <= 0:
                         award_zombie_kill(z)
+                elif getattr(z, "is_ranged", False):
+                    z.update(player_pos, obstacles, zombies, dt, on_shoot=spawn_zombie_bullet)
                 else:
                     z.update(player_pos, obstacles, zombies)
 
@@ -511,6 +629,31 @@ async def main():
 
                         if z.hp <= 0:
                             award_zombie_kill(z)
+
+                        # "Ricochet" talent: bounce to the nearest zombie
+                        # this bullet hasn't hit yet immediately after any
+                        # hit, independent of remaining pierce. Explosive
+                        # rounds never ricochet - they already resolved via
+                        # their splash/burn on impact.
+                        if b.bounces > 0 and not getattr(b, "explosive", False):
+                            nearest_z, nearest_d = None, None
+                            for oz in zombies:
+                                if oz in b.hit_enemies:
+                                    continue
+                                d = math.hypot(oz.rect.centerx - b.pos_x, oz.rect.centery - b.pos_y)
+                                if nearest_d is None or d < nearest_d:
+                                    nearest_d = d
+                                    nearest_z = oz
+                            if nearest_z is not None:
+                                bounce_angle = math.degrees(math.atan2(
+                                    nearest_z.rect.centery - b.pos_y,
+                                    nearest_z.rect.centerx - b.pos_x
+                                ))
+                                speed = math.hypot(b.vx, b.vy)
+                                b.vx = math.cos(math.radians(bounce_angle)) * speed
+                                b.vy = math.sin(math.radians(bounce_angle)) * speed
+                                b.bounces -= 1
+                                b.pierce = max(b.pierce, 1)  # keep it alive to land the bounced hit
                     if b.pierce <= 0:
                         b.kill()
                         break
@@ -522,6 +665,14 @@ async def main():
                     if z.hp <= 0:
                         award_zombie_kill(z)
 
+            for zb in list(zombie_bullets):
+                if player_rect.colliderect(zb.rect):
+                    # No attacker object passed: reflect_percent doesn't
+                    # apply here since a spent projectile has no HP to
+                    # reflect damage back into (unlike zombies themselves).
+                    stats.take_damage(zb.damage)
+                    zb.kill()
+
             if session.pending_talent_choices > 0:
                 start_new_talent_choice()
 
@@ -531,19 +682,20 @@ async def main():
                 game_state = "GAME_OVER"
 
         theme = MAP_THEMES[session.theme_index]
-        screen.fill(theme["floor"])
+        world_surface.fill(theme["floor"])
 
         stats = session.stats
         bullets = session.bullets
         zombies = session.zombies
+        zombie_bullets = session.zombie_bullets
         obstacles = session.obstacles
         player_pos = session.player_pos
 
-        cam_x = player_pos[0] - SCREEN_WIDTH // 2
-        cam_y = player_pos[1] - SCREEN_HEIGHT // 2
+        cam_x = player_pos[0] - WORLD_VIEW_WIDTH // 2
+        cam_y = player_pos[1] - WORLD_VIEW_HEIGHT // 2
 
         if game_state in ("PLAYING", "TALENT_SELECT", "GAME_OVER", "PAUSED", "WEAPON_INFO"):
-            draw_scrolling_grid(screen, cam_x, cam_y, theme)
+            draw_scrolling_grid(world_surface, cam_x, cam_y, theme)
 
             render_objects = []
             render_objects.append((player_pos[1], "player", player_pos))
@@ -555,45 +707,57 @@ async def main():
             render_objects.sort(key=lambda item: item[0])
 
             for b in bullets:
-                screen.blit(b.image, (b.rect.x - cam_x, b.rect.y - cam_y))
+                world_surface.blit(b.image, (b.rect.x - cam_x, b.rect.y - cam_y))
+            for zb in zombie_bullets:
+                world_surface.blit(zb.image, (zb.rect.x - cam_x, zb.rect.y - cam_y))
 
             for obj in render_objects:
                 if obj[1] == "player":
                     px, py = obj[2][0] - cam_x, obj[2][1] - cam_y
-                    pygame.draw.ellipse(screen, (20, 30, 20), (px - 16, py + 8, 32, 12))
-                    pygame.draw.rect(screen, (30, 100, 220), (px - 16, py - 16, 32, 32), border_radius=4)
+                    pygame.draw.ellipse(world_surface, (20, 30, 20), (px - 16, py + 8, 32, 12))
+                    pygame.draw.rect(world_surface, (30, 100, 220), (px - 16, py - 16, 32, 32), border_radius=4)
                     hp_ratio = stats.hp / stats.max_hp if stats.max_hp > 0 else 0
-                    draw_floating_bar(screen, px, py - 30, 40, 6, hp_ratio, (230, 50, 60))
+                    draw_floating_bar(world_surface, px, py - 30, 40, 6, hp_ratio, (230, 50, 60))
                     if stats.armor_hp > 0:
                         arm_ratio = stats.armor_hp / stats.max_armor_hp if stats.max_armor_hp > 0 else 0
                         arm_color = ARMOR_TIERS[stats.armor_tier]["color"] if stats.armor_tier in ARMOR_TIERS else (255, 255, 255)
-                        draw_floating_bar(screen, px, py - 22, 40, 4, arm_ratio, arm_color)
+                        draw_floating_bar(world_surface, px, py - 22, 40, 4, arm_ratio, arm_color)
                 elif obj[1] == "zombie":
                     z = obj[2]
                     zx, zy = z.rect.x - cam_x, z.rect.y - cam_y
                     shadow_w = z.rect.width
-                    pygame.draw.ellipse(screen, (20, 30, 20), (zx, zy + z.rect.height - 8, shadow_w, 10))
+                    pygame.draw.ellipse(world_surface, (20, 30, 20), (zx, zy + z.rect.height - 8, shadow_w, 10))
                     if getattr(z, "burn_timer", 0.0) > 0:
                         glow_r = 34 if getattr(z, "is_boss", False) else 20
                         glow_surf = pygame.Surface((glow_r * 2, glow_r * 2), pygame.SRCALPHA)
                         pygame.draw.circle(glow_surf, (255, 120, 0, 90), (glow_r, glow_r), glow_r)
-                        screen.blit(glow_surf, (z.rect.centerx - cam_x - glow_r, z.rect.centery - cam_y - glow_r))
-                    screen.blit(z.image, (zx, zy))
+                        world_surface.blit(glow_surf, (z.rect.centerx - cam_x - glow_r, z.rect.centery - cam_y - glow_r))
+                    world_surface.blit(z.image, (zx, zy))
                     z_hp_ratio = z.hp / z.max_hp if z.max_hp > 0 else 0
                     bar_w = 46 if getattr(z, "is_boss", False) else 28
-                    draw_floating_bar(screen, z.rect.centerx - cam_x, zy - 10, bar_w, 5, z_hp_ratio, (220, 40, 40))
+                    draw_floating_bar(world_surface, z.rect.centerx - cam_x, zy - 10, bar_w, 5, z_hp_ratio, (220, 40, 40))
                     if getattr(z, "enraged", False):
                         enrage_surf = font_sm.render(t(settings["lang"], "boss_enraged"), True, (255, 90, 0))
-                        screen.blit(enrage_surf, (z.rect.centerx - cam_x - enrage_surf.get_width() // 2, zy - 26))
+                        world_surface.blit(enrage_surf, (z.rect.centerx - cam_x - enrage_surf.get_width() // 2, zy - 26))
                 elif obj[1] == "obstacle":
-                    draw_obstacle(screen, obj[2], cam_x, cam_y, theme)
+                    draw_obstacle(world_surface, obj[2], cam_x, cam_y, theme)
 
             boss_for_hud = next((z for z in zombies if getattr(z, "is_boss", False)), None)
-            draw_boss_meteors(screen, boss_for_hud, cam_x, cam_y)
+            draw_boss_meteors(world_surface, boss_for_hud, cam_x, cam_y)
 
-            draw_particles(screen, session.particles, cam_x, cam_y)
+            draw_particles(world_surface, session.particles, cam_x, cam_y)
 
-            weapon_card_rect = hud.draw(screen, stats, session.current_wave, session.wave_timer / 30.0,
+            # World layer is done - scale it (a no-op on desktop/landscape,
+            # since CAMERA_ZOOM is 1.0 there) to fit the real screen, then
+            # draw the HUD directly onto `screen` afterwards so text/panels
+            # stay crisp at native resolution instead of being scaled too.
+            if CAMERA_ZOOM >= 0.999:
+                screen.blit(world_surface, (0, 0))
+            else:
+                screen.blit(pygame.transform.smoothscale(world_surface, (SCREEN_WIDTH, SCREEN_HEIGHT)), (0, 0))
+
+            wave_duration = 60.0 if session.current_wave % 5 == 0 else 30.0
+            weapon_card_rect = hud.draw(screen, stats, session.current_wave, session.wave_timer / wave_duration,
                      theme["name"], boss_for_hud, font_sm, font_md, font_lg, settings["lang"])
 
             if session.boss_warning_timer > 0:

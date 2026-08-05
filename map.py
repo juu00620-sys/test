@@ -49,6 +49,18 @@ def _detect_screen_size():
 
 
 SCREEN_WIDTH, SCREEN_HEIGHT = _detect_screen_size()
+
+# Without this, a narrow portrait screen shows far fewer world-pixels than
+# the game was tuned for, which makes everything feel "zoomed in" even
+# though nothing is actually being scaled - objects are simply large
+# relative to the small screen. CAMERA_ZOOM < 1.0 renders the world onto a
+# larger virtual viewport (WORLD_VIEW_WIDTH/HEIGHT) that then gets scaled
+# down to fit the real screen, pulling the camera back on narrow screens.
+# Desktop/landscape screens (width >= 850) are unaffected and stay at
+# native 1:1 (zoom 1.0) - see the world_surface render step in main.py.
+CAMERA_ZOOM = max(0.5, min(1.0, SCREEN_WIDTH / 850))
+WORLD_VIEW_WIDTH = int(SCREEN_WIDTH / CAMERA_ZOOM)
+WORLD_VIEW_HEIGHT = int(SCREEN_HEIGHT / CAMERA_ZOOM)
 MAP_WIDTH = 2400
 MAP_HEIGHT = 1800
 
@@ -110,17 +122,18 @@ def move_with_collision(rect, dx, dy, obstacles):
 
 
 def draw_scrolling_grid(screen, cam_x, cam_y, theme):
+    surf_w, surf_h = screen.get_size()
     grid_color = theme["grid"]
     start_x = -(cam_x % GRID_SIZE)
     x = start_x
-    while x < SCREEN_WIDTH:
-        pygame.draw.line(screen, grid_color, (x, 0), (x, SCREEN_HEIGHT), 1)
+    while x < surf_w:
+        pygame.draw.line(screen, grid_color, (x, 0), (x, surf_h), 1)
         x += GRID_SIZE
 
     start_y = -(cam_y % GRID_SIZE)
     y = start_y
-    while y < SCREEN_HEIGHT:
-        pygame.draw.line(screen, grid_color, (0, y), (SCREEN_WIDTH, y), 1)
+    while y < surf_h:
+        pygame.draw.line(screen, grid_color, (0, y), (surf_w, y), 1)
         y += GRID_SIZE
 
     map_rect = pygame.Rect(0 - cam_x, 0 - cam_y, MAP_WIDTH, MAP_HEIGHT)
