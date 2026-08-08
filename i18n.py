@@ -60,6 +60,13 @@ STRINGS = {
         "weapon_info_lifesteal": "Lifesteal",
         "weapon_info_exp_gain": "EXP Gain",
         "weapon_info_hint": "Press C / ESC or tap X to close",
+        "boss_skill_select": "🏆 Boss Defeated! Choose a Skill",
+        "skill_owned": "Owned",
+        "skill_stat_range": "Range",
+        "skill_stat_dmg": "DMG",
+        "skill_stat_interval": "Interval",
+        "skill_stat_duration": "Duration",
+        "skill_stat_cooldown": "Cooldown",
         "talents": {
             "add_armor": {"name": "Add Shield", "desc": "Roll an armor tier for a permanent HP% shield (higher tier = more shield); stacks, low rolls are ignored"},
             "armor_airdrop": {"name": "Armor Airdrop", "desc": "Roll an armor tier for a random permanent bonus - lifesteal, HP% shield, damage reflect, or exp gain"},
@@ -70,6 +77,11 @@ STRINGS = {
             "atk_speed_up": {"name": "Rapid Fire", "desc": "Fire rate +1~5% (random), stacks"},
             "bullet_count_up": {"name": "Extra Round", "desc": "+1 bullet fired per shot"},
             "ricochet_up": {"name": "Ricochet", "desc": "Bullets bounce to 1 more enemy immediately after each hit (Assault Rifle only)"},
+        },
+        "skills": {
+            "grenade_skill": {"name": "Grenade", "desc": "Thrown at the nearest enemy in range - small explosion plus a burn-over-time effect"},
+            "dagger_skill": {"name": "Dagger", "desc": "Fast instant stab against the nearest enemy in range"},
+            "laser_skill": {"name": "Laser", "desc": "Locks onto the nearest enemy and channels continuous damage; retargets automatically if the target dies before the channel ends"},
         },
     },
     "zh": {
@@ -118,6 +130,13 @@ STRINGS = {
         "weapon_info_lifesteal": "吸血",
         "weapon_info_exp_gain": "經驗加成",
         "weapon_info_hint": "按 C／ESC 或點擊 X 關閉",
+        "boss_skill_select": "🏆 首領已擊敗！選擇一項技能",
+        "skill_owned": "已擁有",
+        "skill_stat_range": "射程",
+        "skill_stat_dmg": "傷害",
+        "skill_stat_interval": "間隔",
+        "skill_stat_duration": "持續",
+        "skill_stat_cooldown": "冷卻",
         "talents": {
             "add_armor": {"name": "加護盾", "desc": "隨機抽一個護甲等級，獲得生命%護盾"},
             "armor_airdrop": {"name": "護甲空投", "desc": "隨機抽一個護甲等級，獲得吸血／生命%護盾／反傷／經驗加成其中一種永久加成"},
@@ -128,6 +147,11 @@ STRINGS = {
             "atk_speed_up": {"name": "急速射擊", "desc": "攻速 +1~5%（隨機），可疊加"},
             "bullet_count_up": {"name": "追加彈藥", "desc": "每次射擊 +1 發子彈"},
             "ricochet_up": {"name": "彈射", "desc": "子彈每次命中敵人後，會立即彈射攻擊 1 名額外敵人（限突擊步槍）"},
+        },
+        "skills": {
+            "grenade_skill": {"name": "手榴彈", "desc": "朝範圍內最近的敵人投擲，造成小範圍爆炸並附加燃燒效果"},
+            "dagger_skill": {"name": "匕首", "desc": "對範圍內最近的敵人進行快速瞬間刺擊"},
+            "laser_skill": {"name": "雷射", "desc": "鎖定範圍內最近的敵人進行持續傷害，若目標在持續時間結束前死亡會自動重新鎖定下一個目標"},
         },
     },
 }
@@ -248,6 +272,11 @@ def instruction_lines(lang):
 def talent_text(lang, talent_id, field):
     table = STRINGS.get(lang, STRINGS["en"])["talents"]
     entry = table.get(talent_id, STRINGS["en"]["talents"].get(talent_id, {}))
+    return entry.get(field, "")
+
+def skill_text(lang, skill_id, field):
+    table = STRINGS.get(lang, STRINGS["en"])["skills"]
+    entry = table.get(skill_id, STRINGS["en"]["skills"].get(skill_id, {}))
     return entry.get(field, "")
 
 

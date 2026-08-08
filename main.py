@@ -25,6 +25,7 @@ from zombie import (
     draw_boss_meteors, draw_boss_charge_warning,
 )
 from bullet import Bullet, ZombieBullet
+from skills import SKILL_POOL, SKILL_DATA
 from effects import (
     EFFECT_FLASH_DURATION,
     spawn_boss_kill_particles, spawn_explosion_particles, update_particles, draw_particles, draw_effect_flash,
@@ -35,7 +36,7 @@ from ui import (
     TALENT_POOL, TALENT_WEIGHTS, sample_talent_options,
     draw_wrapped_text, fit_text_1line, FONT_SIZE_MD, FONT_SIZE_SM, FONT_SIZE_LG,
 )
-from i18n import t, instruction_lines, talent_text, next_lang
+from i18n import t, instruction_lines, talent_text, skill_text, next_lang
 
 
 def talent_card_rects(count):
@@ -82,6 +83,14 @@ class GameSession:
         self.zombie_spawn_timer = 0.0
 
         self.pending_talent_choices = 0
+
+        # Boss-kill reward skills (see skills.py / SKILL_SELECT below):
+        # a separate queue from pending_talent_choices, since a boss kill
+        # now offers a skill choice instead of a level-up talent choice.
+        self.pending_skill_choices = 0
+        self.skill_cooldowns = {}  # skill_id -> seconds remaining
+        # Laser skill's channel state (see the skill-firing block below).
+        self.laser_state = {"active": False, "target": None, "time_left": 0.0, "tick_timer": 0.0}
 
         # Queued shots for weapons firing as a rapid burst (zero-spread
         # weapons with more than 1 shot per volley, e.g. sniper + "Extra
@@ -132,6 +141,8 @@ async def main():
     game_state = "INSTRUCTION"
     selected_talent_idx = 0
     talent_options = []
+    selected_skill_idx = 0
+    skill_options = []
 
     joy_state = {"active": False, "offset": [0.0, 0.0]}
 
@@ -205,6 +216,43 @@ async def main():
         else:
             game_state = "PLAYING"
 
+    def start_new_skill_choice():
+        nonlocal skill_options, selected_skill_idx, game_state
+        # Always all 3 - unlike the level-up talent pool this isn't a
+        # weighted random sample, since there are only 3 boss-kill skills.
+        skill_options = list(SKILL_POOL)
+        selected_skill_idx = 0
+        game_state = "SKILL_SELECT"
+
+    def confirm_skill(idx):
+        nonlocal game_state
+        chosen = skill_options[idx]
+        session.stats.skills.add(chosen["id"])
+        session.skill_cooldowns.setdefault(chosen["id"], 0.0)
+
+        session.pending_skill_choices = max(0, session.pending_skill_choices - 1)
+        if session.pending_skill_choices > 0:
+            start_new_skill_choice()
+        else:
+            game_state = "PLAYING"
+
+    def skill_stat_line(lang, skill_id):
+        """Formats a skill's numbers (from SKILL_DATA, never hardcoded in
+        the translation strings) into one readable line for its card."""
+        d = SKILL_DATA[skill_id]
+        if skill_id == "laser_skill":
+            return (
+                f"{t(lang, 'skill_stat_range')}:{d['range']}  "
+                f"{t(lang, 'skill_stat_dmg')}:{d['damage']}/{d['tick_interval']}s  "
+                f"{t(lang, 'skill_stat_duration')}:{d['duration']}s  "
+                f"{t(lang, 'skill_stat_cooldown')}:{d['cooldown']}s"
+            )
+        return (
+            f"{t(lang, 'skill_stat_range')}:{d['range']}  "
+            f"{t(lang, 'skill_stat_dmg')}:{d['damage']}  "
+            f"{t(lang, 'skill_stat_interval')}:{d['attack_interval']}s"
+        )
+
     def award_zombie_kill(z):
         """Kills z and grants its rewards (exp / boss loot / talent
         choices). Shared by direct bullet hits, explosion splash damage,
@@ -216,7 +264,7 @@ async def main():
 
         if is_boss_kill:
             stats.exp += 150 * (1.0 + stats.exp_gain_mult)
-            session.pending_talent_choices += 1
+            session.pending_skill_choices += 1
             session.effect_flash_timer = EFFECT_FLASH_DURATION
             spawn_boss_kill_particles(session.particles, death_x, death_y)
         else:
@@ -270,6 +318,11 @@ async def main():
             for idx, rect in enumerate(talent_card_rects(len(talent_options))):
                 if rect.collidepoint(pos):
                     confirm_talent(idx)
+                    break
+        elif game_state == "SKILL_SELECT":
+            for idx, rect in enumerate(talent_card_rects(len(skill_options))):
+                if rect.collidepoint(pos):
+                    confirm_skill(idx)
                     break
         elif game_state == "PAUSED":
             for idx, rect in enumerate(pause_buttons):
@@ -354,6 +407,14 @@ async def main():
                         selected_talent_idx = (selected_talent_idx + 1) % len(talent_options)
                     elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
                         confirm_talent(selected_talent_idx)
+
+                elif game_state == "SKILL_SELECT":
+                    if event.key in (pygame.K_LEFT, pygame.K_a):
+                        selected_skill_idx = (selected_skill_idx - 1) % len(skill_options)
+                    elif event.key in (pygame.K_RIGHT, pygame.K_d):
+                        selected_skill_idx = (selected_skill_idx + 1) % len(skill_options)
+                    elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                        confirm_skill(selected_skill_idx)
 
                 elif game_state == "GAME_OVER":
                     if event.key in (pygame.K_RETURN, pygame.K_SPACE):
@@ -535,6 +596,106 @@ async def main():
                         still_pending.append(item)
                 session.burst_queue = still_pending
 
+            # --- Boss-kill reward skills: each fires automatically on its
+            # own cooldown, independent of and in addition to the main
+            # weapon above, auto-targeting the nearest zombie within its
+            # own range. ---
+            for skill_id in list(stats.skills):
+                if skill_id == "laser_skill":
+                    continue  # handled separately below (channel, not a per-shot cooldown)
+
+                cd = session.skill_cooldowns.get(skill_id, 0.0)
+                if cd > 0:
+                    session.skill_cooldowns[skill_id] = max(0.0, cd - dt)
+                    continue
+
+                data = SKILL_DATA[skill_id]
+                nearest, nearest_d = None, None
+                for z in zombies:
+                    d = math.hypot(z.rect.centerx - player_pos[0], z.rect.centery - player_pos[1])
+                    if d <= data["range"] and (nearest_d is None or d < nearest_d):
+                        nearest_d = d
+                        nearest = z
+                if nearest is None:
+                    continue
+
+                if skill_id == "dagger_skill":
+                    nearest.hp -= data["damage"]
+                    if stats.lifesteal_percent > 0:
+                        stats.hp = min(stats.max_hp, stats.hp + data["damage"] * stats.lifesteal_percent)
+                    spawn_explosion_particles(session.particles, nearest.rect.centerx, nearest.rect.centery, count=6)
+                    if nearest.hp <= 0:
+                        award_zombie_kill(nearest)
+                    session.skill_cooldowns[skill_id] = data["attack_interval"]
+
+                elif skill_id == "grenade_skill":
+                    ang = math.degrees(math.atan2(
+                        nearest.rect.centery - player_pos[1],
+                        nearest.rect.centerx - player_pos[0]
+                    ))
+                    b = Bullet(
+                        player_pos[0], player_pos[1], ang,
+                        data["damage"], data["bullet_speed"],
+                        1, (255, 140, 0), 1,
+                        data["range"],
+                        explosive=True, explosion_radius=data["explosion_radius"],
+                        explosion_damage=data["damage"] * data["explosion_damage_ratio"],
+                        burn_dps=data["damage"] * data["burn_dps_ratio"], burn_duration=data["burn_duration"],
+                    )
+                    bullets.add(b)
+                    session.skill_cooldowns[skill_id] = data["attack_interval"]
+
+            if "laser_skill" in stats.skills:
+                laser_data = SKILL_DATA["laser_skill"]
+                ls = session.laser_state
+
+                if not ls["active"]:
+                    if session.skill_cooldowns.get("laser_skill", 0.0) > 0:
+                        session.skill_cooldowns["laser_skill"] = max(0.0, session.skill_cooldowns["laser_skill"] - dt)
+                    else:
+                        nearest, nearest_d = None, None
+                        for z in zombies:
+                            d = math.hypot(z.rect.centerx - player_pos[0], z.rect.centery - player_pos[1])
+                            if d <= laser_data["range"] and (nearest_d is None or d < nearest_d):
+                                nearest_d = d
+                                nearest = z
+                        if nearest is not None:
+                            ls["active"] = True
+                            ls["target"] = nearest
+                            ls["time_left"] = laser_data["duration"]
+                            ls["tick_timer"] = 0.0
+                else:
+                    ls["time_left"] -= dt
+
+                    target = ls["target"]
+                    valid = (
+                        target is not None and target.alive()
+                        and math.hypot(target.rect.centerx - player_pos[0], target.rect.centery - player_pos[1]) <= laser_data["range"]
+                    )
+                    if not valid:
+                        nearest, nearest_d = None, None
+                        for z in zombies:
+                            d = math.hypot(z.rect.centerx - player_pos[0], z.rect.centery - player_pos[1])
+                            if d <= laser_data["range"] and (nearest_d is None or d < nearest_d):
+                                nearest_d = d
+                                nearest = z
+                        target = nearest
+                        ls["target"] = target
+
+                    if ls["time_left"] <= 0 or target is None:
+                        ls["active"] = False
+                        ls["target"] = None
+                        session.skill_cooldowns["laser_skill"] = laser_data["cooldown"]
+                    else:
+                        ls["tick_timer"] -= dt
+                        if ls["tick_timer"] <= 0:
+                            ls["tick_timer"] = laser_data["tick_interval"]
+                            target.hp -= laser_data["damage"]
+                            if stats.lifesteal_percent > 0:
+                                stats.hp = min(stats.max_hp, stats.hp + laser_data["damage"] * stats.lifesteal_percent)
+                            if target.hp <= 0:
+                                award_zombie_kill(target)
+
             session.wave_timer = max(0.0, session.wave_timer - dt)
 
             if not session.boss_wave_active and session.wave_timer <= 0:
@@ -707,6 +868,8 @@ async def main():
 
             if session.pending_talent_choices > 0:
                 start_new_talent_choice()
+            elif session.pending_skill_choices > 0:
+                start_new_skill_choice()
 
             if stats.hp <= 0:
                 final_stats_snapshot["wave"] = session.current_wave
@@ -726,7 +889,7 @@ async def main():
         cam_x = player_pos[0] - WORLD_VIEW_WIDTH // 2
         cam_y = player_pos[1] - WORLD_VIEW_HEIGHT // 2
 
-        if game_state in ("PLAYING", "TALENT_SELECT", "GAME_OVER", "PAUSED", "WEAPON_INFO"):
+        if game_state in ("PLAYING", "TALENT_SELECT", "SKILL_SELECT", "GAME_OVER", "PAUSED", "WEAPON_INFO"):
             draw_scrolling_grid(world_surface, cam_x, cam_y, theme)
 
             render_objects = []
@@ -779,6 +942,12 @@ async def main():
             draw_boss_charge_warning(world_surface, boss_for_hud, cam_x, cam_y)
 
             draw_particles(world_surface, session.particles, cam_x, cam_y)
+
+            if session.laser_state.get("active") and session.laser_state.get("target") is not None and session.laser_state["target"].alive():
+                lt = session.laser_state["target"]
+                lp_x, lp_y = player_pos[0] - cam_x, player_pos[1] - cam_y
+                lt_x, lt_y = lt.rect.centerx - cam_x, lt.rect.centery - cam_y
+                pygame.draw.line(world_surface, (255, 40, 220), (lp_x, lp_y), (lt_x, lt_y), 3)
 
             # World layer is done - scale it (a no-op on desktop/landscape,
             # since CAMERA_ZOOM is 1.0 there) to fit the real screen, then
@@ -854,6 +1023,50 @@ async def main():
                 max_desc_lines = max(1, desc_area_h // (font_sm.get_height() + 4))
                 draw_wrapped_text(screen, font_sm, opt_desc, (200, 200, 200), bx + 15, by + 70, inner_w,
                                    line_gap=4, max_lines=max_desc_lines)
+
+        if game_state == "SKILL_SELECT":
+            overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 180))
+            screen.blit(overlay, (0, 0))
+
+            title_font, title_text = fit_text_1line(FONT_PATH, t(settings["lang"], "boss_skill_select"), SCREEN_WIDTH - 40, FONT_SIZE_LG)
+            title_surf = title_font.render(title_text, True, (255, 215, 0))
+            screen.blit(title_surf, ((SCREEN_WIDTH - title_surf.get_width()) // 2, 150))
+
+            if session.pending_skill_choices > 1:
+                queue_txt = font_sm.render(
+                    t(settings["lang"], "more_pending", n=session.pending_skill_choices - 1),
+                    True, (255, 255, 255)
+                )
+                screen.blit(queue_txt, ((SCREEN_WIDTH - queue_txt.get_width()) // 2, 195))
+
+            card_rects = talent_card_rects(len(skill_options))
+            for idx, opt in enumerate(skill_options):
+                is_sel = (idx == selected_skill_idx)
+                bx, by, card_w, card_h = card_rects[idx]
+                pygame.draw.rect(screen, (60, 65, 85) if is_sel else (35, 38, 50), (bx, by, card_w, card_h), border_radius=10)
+                pygame.draw.rect(screen, (255, 215, 0) if is_sel else (80, 80, 80), (bx, by, card_w, card_h), width=3 if is_sel else 1, border_radius=10)
+
+                inner_w = card_w - 30  # 15px padding on each side
+
+                opt_name = skill_text(settings["lang"], opt["id"], "name")
+                name_font, name_text = fit_text_1line(FONT_PATH, opt_name, inner_w, FONT_SIZE_MD)
+                screen.blit(name_font.render(name_text, True, (255, 255, 255)), (bx + 15, by + 20))
+
+                if opt["id"] in session.stats.skills:
+                    owned_font, owned_text = fit_text_1line(FONT_PATH, t(settings["lang"], "skill_owned"), inner_w, FONT_SIZE_SM)
+                    owned_surf = owned_font.render(owned_text, True, (120, 220, 120))
+                    screen.blit(owned_surf, (bx + card_w - owned_surf.get_width() - 12, by + 24))
+
+                opt_desc = skill_text(settings["lang"], opt["id"], "desc")
+                desc_area_h = card_h - 70 - 15
+                max_desc_lines = max(1, (desc_area_h - int(FONT_SIZE_SM * 1.6)) // (font_sm.get_height() + 4))
+                used_h = draw_wrapped_text(screen, font_sm, opt_desc, (200, 200, 200), bx + 15, by + 70, inner_w,
+                                            line_gap=4, max_lines=max_desc_lines)
+
+                stat_line = skill_stat_line(settings["lang"], opt["id"])
+                draw_wrapped_text(screen, font_sm, stat_line, (150, 210, 255), bx + 15, by + 70 + used_h + 6, inner_w,
+                                   line_gap=4, max_lines=2)
 
         if game_state == "GAME_OVER":
             overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)

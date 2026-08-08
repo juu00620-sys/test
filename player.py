@@ -91,6 +91,12 @@ class PlayerStats:
 
         self.weapon = Weapon("rifle", "Fine")
 
+        # Boss-kill reward skills (see skills.py / SKILL_SELECT in
+        # main.py) - a set of skill ids the player has unlocked. Each one
+        # then fires automatically, independent of and in addition to the
+        # main weapon above.
+        self.skills = set()
+
     def _recompute_shield(self):
         """Recomputes max_armor_hp from shield_percent and tops up the
         current shield buffer by however much new capacity was just added,
