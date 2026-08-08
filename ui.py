@@ -431,7 +431,7 @@ class GameHUD:
         pygame.draw.rect(surface, bg_color, (x, y, w, h), border_radius=6)
         pygame.draw.rect(surface, border_color, (x, y, w, h), width=2, border_radius=6)
 
-    def draw(self, screen, stats, current_wave, wave_timer_ratio, theme_name, boss, font_sm, font_md, font_lg, lang="en"):
+    def draw(self, screen, stats, current_wave, wave_timer_ratio, theme_name, bosses, font_sm, font_md, font_lg, lang="en"):
         # On a narrow (portrait phone) screen the wave banner used to be
         # centered at a fixed y=15, which overlaps the top-left level/HP
         # panel once the screen is too narrow to fit both side by side.
@@ -506,18 +506,22 @@ class GameHUD:
         if timer_w > 0:
             pygame.draw.rect(screen, (255, 100, 0), (wave_x + 10, wave_y + 43, timer_w, 4), border_radius=2)
 
-        if boss is not None:
+        if bosses:
             boss_w = min(320, self.screen_w - 2 * margin)
             boss_x = (self.screen_w - boss_w) // 2
-            boss_y = wave_y + 55
-            self._draw_panel(screen, (boss_x, boss_y, boss_w, 26), (40, 15, 15))
-            ratio = max(0.0, boss.hp / boss.max_hp)
-            fill_w = int((boss_w - 8) * ratio)
-            if fill_w > 0:
-                pygame.draw.rect(screen, (220, 20, 40), (boss_x + 4, boss_y + 4, fill_w, 18), border_radius=3)
-            boss_font, boss_text = fit_text_1line(self.font_path, t(lang, "boss"), boss_w - 16, FONT_SIZE_SM)
-            label = boss_font.render(boss_text, True, (255, 255, 255))
-            screen.blit(label, (boss_x + boss_w // 2 - label.get_width() // 2, boss_y + 6))
+            bar_h, gap = 26, 6
+            boss_label = t(lang, "boss")
+            for i, boss in enumerate(bosses):
+                boss_y = wave_y + 55 + i * (bar_h + gap)
+                self._draw_panel(screen, (boss_x, boss_y, boss_w, bar_h), (40, 15, 15))
+                ratio = max(0.0, boss.hp / boss.max_hp)
+                fill_w = int((boss_w - 8) * ratio)
+                if fill_w > 0:
+                    pygame.draw.rect(screen, (220, 20, 40), (boss_x + 4, boss_y + 4, fill_w, bar_h - 8), border_radius=3)
+                label_text = boss_label if len(bosses) == 1 else f"{boss_label} {i + 1}"
+                boss_font, boss_text = fit_text_1line(self.font_path, label_text, boss_w - 16, FONT_SIZE_SM)
+                label = boss_font.render(boss_text, True, (255, 255, 255))
+                screen.blit(label, (boss_x + boss_w // 2 - label.get_width() // 2, boss_y + (bar_h - label.get_height()) // 2))
 
         # Weapon card: shrunk on narrow screens so it clears the (also
         # smaller, see player.py) joystick in the opposite bottom corner.

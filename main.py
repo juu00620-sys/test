@@ -39,6 +39,30 @@ from ui import (
 from i18n import t, instruction_lines, talent_text, skill_text, next_lang
 
 
+def boss_count_for_wave(wave):
+    """Every 20 waves adds one more simultaneous boss, stacking:
+    wave 20 -> 2 bosses, wave 40 -> 3, wave 60 -> 4, and so on. Ordinary
+    boss waves (5, 10, 15, 25, ...) still spawn just the usual 1."""
+    return 1 + (wave // 20)
+
+
+def boss_spawn_points(player_pos, count):
+    """Spreads `count` boss spawn points evenly around the player on a
+    fixed-radius ring (with a random overall rotation so it's not the same
+    layout every time), instead of clustering them on top of each other."""
+    radius = 600
+    start_angle = random.uniform(0, 360)
+    points = []
+    for i in range(count):
+        angle = math.radians(start_angle + (360 / count) * i)
+        bx = player_pos[0] + math.cos(angle) * radius
+        by = player_pos[1] + math.sin(angle) * radius
+        bx = max(0, min(MAP_WIDTH, bx))
+        by = max(0, min(MAP_HEIGHT, by))
+        points.append((bx, by))
+    return points
+
+
 def talent_card_rects(count):
     """Lays out `count` talent-select cards. On screens wide enough it's
     the original single horizontal row, centered; on screens too narrow
@@ -91,6 +115,15 @@ class GameSession:
         self.skill_cooldowns = {}  # skill_id -> seconds remaining
         # Laser skill's channel state (see the skill-firing block below).
         self.laser_state = {"active": False, "target": None, "time_left": 0.0, "tick_timer": 0.0}
+        # Tornado skill's persistent-entity state (see the skill-firing
+        # block below): once acquired it's always out, re-summoning (fresh
+        # random damage, size reset to 1x) every SKILL_DATA cooldown
+        # seconds, growing damage/size on each kill in between resets.
+        self.tornado_state = {
+            "active": False, "x": 0.0, "y": 0.0,
+            "damage": 0.0, "size_mult": 1.0,
+            "tick_timer": 0.0, "resummon_timer": 0.0,
+        }
 
         # Queued shots for weapons firing as a rapid burst (zero-spread
         # weapons with more than 1 shot per volley, e.g. sniper + "Extra
@@ -245,6 +278,11 @@ async def main():
                 f"{t(lang, 'skill_stat_range')}:{d['range']}  "
                 f"{t(lang, 'skill_stat_dmg')}:{d['damage']}/{d['tick_interval']}s  "
                 f"{t(lang, 'skill_stat_duration')}:{d['duration']}s  "
+                f"{t(lang, 'skill_stat_cooldown')}:{d['cooldown']}s"
+            )
+        if skill_id == "tornado_skill":
+            return (
+                f"{t(lang, 'skill_stat_dmg')}:{d['damage_min']}~{d['damage_max']}/{d['tick_interval']}s  "
                 f"{t(lang, 'skill_stat_cooldown')}:{d['cooldown']}s"
             )
         return (
@@ -601,8 +639,8 @@ async def main():
             # weapon above, auto-targeting the nearest zombie within its
             # own range. ---
             for skill_id in list(stats.skills):
-                if skill_id == "laser_skill":
-                    continue  # handled separately below (channel, not a per-shot cooldown)
+                if skill_id in ("laser_skill", "tornado_skill"):
+                    continue  # handled separately below (persistent entity, not a per-shot cooldown)
 
                 cd = session.skill_cooldowns.get(skill_id, 0.0)
                 if cd > 0:
@@ -668,10 +706,11 @@ async def main():
                     ls["time_left"] -= dt
 
                     target = ls["target"]
-                    valid = (
-                        target is not None and target.alive()
-                        and math.hypot(target.rect.centerx - player_pos[0], target.rect.centery - player_pos[1]) <= laser_data["range"]
-                    )
+                    # Once locked, the beam stays on this target no matter
+                    # how far it wanders - only losing the target if it
+                    # actually dies (leaves the sprite group), not because
+                    # it moved out of the skill's acquisition range.
+                    valid = target is not None and target.alive()
                     if not valid:
                         nearest, nearest_d = None, None
                         for z in zombies:
@@ -696,6 +735,80 @@ async def main():
                             if target.hp <= 0:
                                 award_zombie_kill(target)
 
+            if "tornado_skill" in stats.skills:
+                td = SKILL_DATA["tornado_skill"]
+                ts = session.tornado_state
+
+                def _resummon_tornado():
+                    ts["x"], ts["y"] = player_pos[0], player_pos[1]
+                    ts["damage"] = random.uniform(td["damage_min"], td["damage_max"])
+                    ts["size_mult"] = 1.0
+                    ts["tick_timer"] = 0.0
+                    ts["resummon_timer"] = td["cooldown"]
+
+                if not ts["active"]:
+                    # First time this run acquiring the skill: summon it
+                    # immediately instead of waiting out a cooldown.
+                    ts["active"] = True
+                    _resummon_tornado()
+                else:
+                    ts["resummon_timer"] -= dt
+                    if ts["resummon_timer"] <= 0:
+                        _resummon_tornado()
+
+                    # Seek the nearest zombie in range and drift toward it -
+                    # slow and steady, so it reads as "drifting" rather than
+                    # chasing (unlike the zombies' own move_with_collision
+                    # steering, the tornado freely crosses obstacles).
+                    nearest, nearest_d = None, None
+                    for z in zombies:
+                        d = math.hypot(z.rect.centerx - ts["x"], z.rect.centery - ts["y"])
+                        if d <= td["range"] and (nearest_d is None or d < nearest_d):
+                            nearest_d = d
+                            nearest = z
+                    if nearest is not None:
+                        dx = nearest.rect.centerx - ts["x"]
+                        dy = nearest.rect.centery - ts["y"]
+                        dist = math.hypot(dx, dy)
+                        if dist > 1:
+                            ts["x"] += dx / dist * td["move_speed"]
+                            ts["y"] += dy / dist * td["move_speed"]
+
+                    pull_radius = td["pull_radius"] * ts["size_mult"]
+                    caught = []
+                    for z in zombies:
+                        d = math.hypot(z.rect.centerx - ts["x"], z.rect.centery - ts["y"])
+                        if d <= pull_radius:
+                            caught.append((z, d))
+
+                    # Pull everything it caught in toward its own center -
+                    # both how far it reaches (pull_radius above) and how
+                    # hard it pulls scale with size_mult, so a tornado
+                    # that's grown from kills feels proportionally stronger.
+                    pull_strength = 1.5 * ts["size_mult"]
+                    for z, d in caught:
+                        if d > 1:
+                            pull_amt = min(d, pull_strength)
+                            nx = z.rect.centerx + (ts["x"] - z.rect.centerx) / d * pull_amt
+                            ny = z.rect.centery + (ts["y"] - z.rect.centery) / d * pull_amt
+                            z.rect.centerx, z.rect.centery = int(nx), int(ny)
+                            if hasattr(z, "pos_x"):
+                                z.pos_x, z.pos_y = float(nx), float(ny)
+
+                    ts["tick_timer"] -= dt
+                    if ts["tick_timer"] <= 0:
+                        ts["tick_timer"] = td["tick_interval"]
+                        for z, d in caught:
+                            z.hp -= ts["damage"]
+                            if stats.lifesteal_percent > 0:
+                                stats.hp = min(stats.max_hp, stats.hp + ts["damage"] * stats.lifesteal_percent)
+                            if z.hp <= 0:
+                                award_zombie_kill(z)
+                                # Grows permanently until the next resummon
+                                # resets it back to a fresh random roll.
+                                ts["damage"] += td["damage_growth_per_kill"]
+                                ts["size_mult"] *= td["size_growth_per_kill"]
+
             session.wave_timer = max(0.0, session.wave_timer - dt)
 
             if not session.boss_wave_active and session.wave_timer <= 0:
@@ -718,31 +831,29 @@ async def main():
                         obstacles = session.obstacles
 
             if session.boss_wave_active and session.wave_timer <= 0:
-                # Countdown ran out without the boss dying - force it into
-                # enraged mode right as the player's timer hits zero,
-                # instead of ending the wave (which now only happens once
-                # the boss is actually killed).
-                boss_in_play = next((z for z in zombies if getattr(z, "is_boss", False)), None)
-                if boss_in_play is not None:
-                    boss_in_play.force_enrage()
+                # Countdown ran out without the boss(es) dying - force all
+                # of them into enraged mode right as the player's timer
+                # hits zero, instead of ending the wave (which now only
+                # happens once every boss is actually killed).
+                bosses_in_play = [z for z in zombies if getattr(z, "is_boss", False)]
+                for b in bosses_in_play:
+                    b.force_enrage()
 
             if session.boss_warning_timer > 0:
                 session.boss_warning_timer = max(0.0, session.boss_warning_timer - dt)
 
-            boss_in_play = next((z for z in zombies if getattr(z, "is_boss", False)), None)
+            bosses_in_play = [z for z in zombies if getattr(z, "is_boss", False)]
 
             if session.boss_wave_active and not session.boss_spawned and session.boss_warning_timer <= 0:
-                bx = player_pos[0] + random.choice([-600, 600])
-                by = player_pos[1] + random.choice([-450, 450])
-                bx = max(0, min(MAP_WIDTH, bx))
-                by = max(0, min(MAP_HEIGHT, by))
+                boss_n = boss_count_for_wave(session.current_wave)
                 boss_hp = (400 + session.current_wave * 80) * BOSS_HP_MULTIPLIER
-                zombies.add(Boss(bx, by, hp=boss_hp, wave=session.current_wave))
+                for bx, by in boss_spawn_points(player_pos, boss_n):
+                    zombies.add(Boss(bx, by, hp=boss_hp, wave=session.current_wave))
                 session.boss_spawned = True
-                boss_in_play = next((z for z in zombies if getattr(z, "is_boss", False)), None)
+                bosses_in_play = [z for z in zombies if getattr(z, "is_boss", False)]
 
-            if session.boss_wave_active and session.boss_spawned and boss_in_play is None:
-                # The boss just died: NOW advance to the next wave and
+            if session.boss_wave_active and session.boss_spawned and not bosses_in_play:
+                # All bosses just died: NOW advance to the next wave and
                 # change the map, instead of doing it off the timer.
                 session.boss_wave_active = False
                 session.current_wave += 1
@@ -754,7 +865,7 @@ async def main():
                     session.obstacles = build_obstacles(new_theme)
                     obstacles = session.obstacles
 
-            if not session.boss_wave_active or (session.boss_spawned and boss_in_play is None):
+            if not session.boss_wave_active or (session.boss_spawned and not bosses_in_play):
                 session.zombie_spawn_timer -= dt
                 if session.zombie_spawn_timer <= 0:
                     session.zombie_spawn_timer = max(0.4, 2.0 - (session.current_wave * 0.1))
@@ -937,9 +1048,10 @@ async def main():
                 elif obj[1] == "obstacle":
                     draw_obstacle(world_surface, obj[2], cam_x, cam_y, theme)
 
-            boss_for_hud = next((z for z in zombies if getattr(z, "is_boss", False)), None)
-            draw_boss_meteors(world_surface, boss_for_hud, cam_x, cam_y)
-            draw_boss_charge_warning(world_surface, boss_for_hud, cam_x, cam_y)
+            bosses_for_hud = [z for z in zombies if getattr(z, "is_boss", False)]
+            for b in bosses_for_hud:
+                draw_boss_meteors(world_surface, b, cam_x, cam_y)
+                draw_boss_charge_warning(world_surface, b, cam_x, cam_y)
 
             draw_particles(world_surface, session.particles, cam_x, cam_y)
 
@@ -948,6 +1060,21 @@ async def main():
                 lp_x, lp_y = player_pos[0] - cam_x, player_pos[1] - cam_y
                 lt_x, lt_y = lt.rect.centerx - cam_x, lt.rect.centery - cam_y
                 pygame.draw.line(world_surface, (255, 40, 220), (lp_x, lp_y), (lt_x, lt_y), 3)
+
+            if session.tornado_state.get("active"):
+                ts = session.tornado_state
+                tx, ty = ts["x"] - cam_x, ts["y"] - cam_y
+                base_r = max(18, 26 * ts.get("size_mult", 1.0))
+                spin = pygame.time.get_ticks() * 0.01
+                for i in range(3):
+                    r = base_r * (0.55 + i * 0.22)
+                    alpha = max(25, 130 - i * 35)
+                    half = int(r) + 4
+                    ring_surf = pygame.Surface((half * 2, half * 2), pygame.SRCALPHA)
+                    pygame.draw.circle(ring_surf, (170, 220, 255, alpha), (half, half), int(r), width=4)
+                    off_x = math.cos(spin + i * 2.1) * (r * 0.15)
+                    off_y = math.sin(spin + i * 2.1) * (r * 0.15)
+                    world_surface.blit(ring_surf, (tx - half + off_x, ty - half + off_y))
 
             # World layer is done - scale it (a no-op on desktop/landscape,
             # since CAMERA_ZOOM is 1.0 there) to fit the real screen, then
@@ -960,7 +1087,7 @@ async def main():
 
             wave_duration = 60.0 if session.current_wave % 5 == 0 else 30.0
             weapon_card_rect = hud.draw(screen, stats, session.current_wave, session.wave_timer / wave_duration,
-                     theme["name"], boss_for_hud, font_sm, font_md, font_lg, settings["lang"])
+                     theme["name"], bosses_for_hud, font_sm, font_md, font_lg, settings["lang"])
 
             if session.boss_warning_timer > 0:
                 blink = math.sin(pygame.time.get_ticks() * 0.02) > 0

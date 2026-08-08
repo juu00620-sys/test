@@ -82,6 +82,7 @@ STRINGS = {
             "grenade_skill": {"name": "Grenade", "desc": "Thrown at the nearest enemy in range - small explosion plus a burn-over-time effect"},
             "dagger_skill": {"name": "Dagger", "desc": "Fast instant stab against the nearest enemy in range"},
             "laser_skill": {"name": "Laser", "desc": "Locks onto the nearest enemy and channels continuous damage; retargets automatically if the target dies before the channel ends"},
+            "tornado_skill": {"name": "Summon Tornado", "desc": "Every 10s summons a slow-drifting tornado that seeks the nearest enemy and pulls nearby enemies in, dealing damage every 0.8s; damage +1 and size doubles per kill"},
         },
     },
     "zh": {
@@ -152,6 +153,7 @@ STRINGS = {
             "grenade_skill": {"name": "手榴彈", "desc": "朝範圍內最近的敵人投擲，造成小範圍爆炸並附加燃燒效果"},
             "dagger_skill": {"name": "匕首", "desc": "對範圍內最近的敵人進行快速瞬間刺擊"},
             "laser_skill": {"name": "雷射", "desc": "鎖定範圍內最近的敵人進行持續傷害，若目標在持續時間結束前死亡會自動重新鎖定下一個目標"},
+            "tornado_skill": {"name": "召喚龍捲風", "desc": "每 10 秒召喚一個緩慢移動的龍捲風，自動追蹤最近的敵人並牽引附近敵人，每 0.8 秒造成一次傷害；每擊殺一名敵人傷害 +1、體積增加一倍"},
         },
     },
 }
